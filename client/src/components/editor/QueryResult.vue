@@ -1,36 +1,43 @@
 <template>
-  <div class="result-area" v-if="result" :style="{ height: resultHeight + 'px' }">
-    <!-- 拖拽调整条 -->
+  <!-- 统一容器：无论是否有查询结果，始终可拖拽调整高度 -->
+  <div class="result-area" :style="{ height: resultHeight + 'px' }">
+    <!-- 拖拽调整条：始终可见 -->
     <div class="resize-handle" @mousedown.prevent="handleResizeStart">
       <div class="resize-indicator"></div>
     </div>
-    <div class="result-toolbar">
-      <span>查询结果: {{ result.rowCount }} 行</span>
-      <span>耗时: {{ result.executionTime }}ms</span>
-      <div style="flex: 1" />
-      <el-button size="small" text @click="handleExport">导出 CSV</el-button>
+
+    <!-- 有结果：工具栏 + 数据表格 -->
+    <template v-if="result">
+      <div class="result-toolbar">
+        <span>查询结果: {{ result.rowCount }} 行</span>
+        <span>耗时: {{ result.executionTime }}ms</span>
+        <div style="flex: 1" />
+        <el-button size="small" text @click="handleExport">导出 CSV</el-button>
+      </div>
+      <div class="result-table">
+        <el-table
+          :data="result.rows"
+          stripe
+          border
+          size="small"
+          height="100%"
+        >
+          <el-table-column
+            v-for="col in result.columns"
+            :key="col"
+            :prop="col"
+            :label="col"
+            min-width="120"
+            show-overflow-tooltip
+          />
+        </el-table>
+      </div>
+    </template>
+
+    <!-- 无结果：空状态提示 -->
+    <div v-else class="result-empty-inner">
+      <el-empty description="执行 SQL 查询查看结果" :image-size="40" />
     </div>
-    <div class="result-table">
-      <el-table
-        :data="result.rows"
-        stripe
-        border
-        size="small"
-        height="100%"
-      >
-        <el-table-column
-          v-for="col in result.columns"
-          :key="col"
-          :prop="col"
-          :label="col"
-          min-width="120"
-          show-overflow-tooltip
-        />
-      </el-table>
-    </div>
-  </div>
-  <div v-else class="result-empty">
-    <el-empty description="执行 SQL 查询查看结果" :image-size="40" />
   </div>
 </template>
 
@@ -142,14 +149,12 @@ function handleExport() {
     flex: 1;
     overflow: hidden;
   }
-}
 
-.result-empty {
-  height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-top: 1px solid #e4e7ed;
-  flex-shrink: 0;
+  .result-empty-inner {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }
 </style>
