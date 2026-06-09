@@ -141,3 +141,12 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Server data files
+server/data/*.json
+
+# Server dist
+server/dist/
+
+# IDE tool working directory
+.trae/
