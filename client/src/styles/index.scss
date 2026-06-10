@@ -4,6 +4,16 @@
   box-sizing: border-box;
 }
 
+/* 禁用所有 CSS 过渡和动画，让拖动体验更流畅 */
+*,
+*::before,
+*::after {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+  transition-delay: 0s !important;
+  animation-delay: 0s !important;
+}
+
 html, body, #app {
   height: 100%;
   width: 100%;

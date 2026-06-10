@@ -44,10 +44,10 @@
         <el-input v-model="form.database" placeholder="可选" />
       </el-form-item>
       <el-form-item>
-        <el-button @click="handleTestForm">测试连接</el-button>
         <el-button type="primary" @click="handleSubmit">
           {{ editingId ? '更新' : '添加' }}
         </el-button>
+        <el-button @click="handleTestForm">测试连接</el-button>
         <el-button v-if="editingId" @click="resetForm">取消</el-button>
       </el-form-item>
     </el-form>

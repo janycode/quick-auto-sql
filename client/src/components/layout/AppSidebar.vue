@@ -19,6 +19,7 @@
     <div class="sidebar-content">
       <DbTree
         v-if="activeConnectionId"
+        ref="dbTreeRef"
         :connection-id="activeConnectionId"
         @select-table="handleSelectTable"
         @checked-tables-change="handleCheckedTablesChange"
@@ -37,12 +38,13 @@ import DbTree from '@/components/database/DbTree.vue'
 const emit = defineEmits<{
   'add-connection': []
   'select-table': [database: string, table: string]
-  'checked-tables-change': [tables: { database: string; table: string }[]]
+  'checked-tables-change': [tables: { database: string; table: string; comment: string }[]]
 }>()
 
 const connectionStore = useConnectionStore()
 const connections = computed(() => connectionStore.connections)
 const activeConnectionId = ref('')
+const dbTreeRef = ref()
 
 // 监听 store 中的 activeConnection，同步到 select
 watch(() => connectionStore.activeConnection, (conn) => {
@@ -60,7 +62,39 @@ function handleSelectTable(database: string, table: string) {
   emit('select-table', database, table)
 }
 
-function handleCheckedTablesChange(tables: { database: string; table: string }[]) {
+function handleCheckedTablesChange(tables: { database: string; table: string; comment: string }[]) {
   emit('checked-tables-change', tables)
 }
+
+defineExpose({
+  clearCheckedTables: () => dbTreeRef.value?.clearChecked(),
+})
 </script>
+
+<style scoped lang="scss">
+.app-sidebar {
+  width: 280px;
+  border-right: 1px solid #e4e7ed;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+
+  .sidebar-header {
+    padding: 8px;
+    border-bottom: 1px solid #e4e7ed;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    :deep(.el-button--small.is-circle) {
+      margin-left: 5px;
+    }
+  }
+
+  .sidebar-content {
+    flex: 1;
+    overflow: auto;
+    padding: 8px;
+  }
+}
+</style>

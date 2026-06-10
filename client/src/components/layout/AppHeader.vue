@@ -6,11 +6,11 @@
         Quick Auto SQL
       </div>
       <div class="header-actions">
-        <el-button text bg size="small" @click="$router.push('/workspace')">
+        <el-button :type="isWorkspace ? 'primary' : 'text'" :plain="!isWorkspace" size="small" @click="$router.push('/workspace')">
           <el-icon><Monitor /></el-icon>
           工作区
         </el-button>
-        <el-button text bg size="small" @click="$router.push('/settings/ai')">
+        <el-button :type="isAiSettings ? 'primary' : 'text'" :plain="!isAiSettings" size="small" @click="$router.push('/settings/ai')">
           <el-icon><Setting /></el-icon>
           AI 配置
         </el-button>
@@ -21,3 +21,12 @@
     </div>
   </div>
 </template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+const isWorkspace = computed(() => route.path === '/workspace')
+const isAiSettings = computed(() => route.path === '/settings/ai')
+</script>

@@ -2,6 +2,7 @@
   <AppHeader>
     <div class="app-body">
       <AppSidebar
+        ref="appSidebarRef"
         @add-connection="showConnectionDialog = true"
         @select-table="handleSelectTable"
         @checked-tables-change="handleCheckedTablesChange"
@@ -12,16 +13,20 @@
           v-model="sql"
           :databases="databases"
           :executing="executing"
+          :selected-database="currentDatabase"
           @execute="handleExecute"
           @database-change="handleDatabaseChange"
         />
         <QueryResult :result="queryResult" />
       </div>
-      <AiChat ref="aiChatRef" @use-sql="handleUseSql" />
+      <AiChat ref="aiChatRef" @use-sql="handleUseSql" @clear-tables="handleClearTables" />
     </div>
 
     <!-- 连接管理弹窗 -->
-    <el-dialog v-model="showConnectionDialog" title="连接管理" width="700px">
+    <el-dialog v-model="showConnectionDialog" title="连接管理" width="700px" :close-on-click-modal="false">
+      <div class="db-type-tags">
+        <el-tag type="primary" effect="plain">MySQL</el-tag>
+      </div>
       <ConnectionManager @close="showConnectionDialog = false" />
     </el-dialog>
   </AppHeader>
@@ -48,6 +53,7 @@ const databaseStore = useDatabaseStore()
 const sql = ref('')
 const sqlEditorRef = ref()
 const aiChatRef = ref()
+const appSidebarRef = ref()
 const showConnectionDialog = ref(false)
 const executing = ref(false)
 const queryResult = ref<IQueryResult | null>(null)
@@ -70,9 +76,18 @@ async function handleSelectTable(database: string, table: string) {
   await databaseStore.fetchColumns(connectionStore.activeConnection!.id, database, table)
 }
 
-function handleCheckedTablesChange(tables: { database: string; table: string }[]) {
+function handleCheckedTablesChange(tables: { database: string; table: string; comment: string }[]) {
   // 自动同步选中的表到 AI 面板
   aiChatRef.value?.setCheckedTables(tables)
+  // 如果勾选了表，自动切换到第一个表所在的数据库
+  if (tables.length > 0 && tables[0].database) {
+    currentDatabase.value = tables[0].database
+    databaseStore.currentDatabase = tables[0].database
+  }
+}
+
+function handleClearTables() {
+  appSidebarRef.value?.clearCheckedTables()
 }
 
 async function handleExecute(sqlText: string) {
@@ -114,3 +129,11 @@ watch(() => connectionStore.activeConnection, async (conn) => {
   }
 })
 </script>
+
+<style scoped lang="scss">
+.db-type-tags {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e4e7ed;
+}
+</style>

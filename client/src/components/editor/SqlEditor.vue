@@ -23,7 +23,7 @@
       </el-button>
       <div style="flex: 1" />
       <el-button size="small" text @click="handleClear">
-        <el-icon><Delete /></el-icon>
+        清空
       </el-button>
     </div>
     <div class="editor-content" ref="editorContainer"></div>
@@ -41,6 +41,7 @@ const props = defineProps<{
   modelValue: string
   databases: IDatabase[]
   executing?: boolean
+  selectedDatabase?: string
 }>()
 
 const emit = defineEmits<{
@@ -54,6 +55,11 @@ const currentDatabase = ref('')
 let editor: monaco.editor.IStandaloneCodeEditor | null = null
 
 onMounted(() => {
+  // 初始化数据库选择器
+  if (props.selectedDatabase) {
+    currentDatabase.value = props.selectedDatabase
+  }
+  
   if (editorContainer.value) {
     editor = monaco.editor.create(editorContainer.value, {
       value: props.modelValue,
@@ -87,6 +93,13 @@ onBeforeUnmount(() => {
 watch(() => props.modelValue, (newVal) => {
   if (editor && editor.getValue() !== newVal) {
     editor.setValue(newVal)
+  }
+})
+
+// 监听外部传入的数据库，自动同步到选择器
+watch(() => props.selectedDatabase, (newDb) => {
+  if (newDb && currentDatabase.value !== newDb) {
+    currentDatabase.value = newDb
   }
 })
 

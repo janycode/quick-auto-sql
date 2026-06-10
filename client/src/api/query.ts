@@ -2,6 +2,7 @@ import request from '@/utils/request'
 
 export interface IQueryResult {
   columns: string[]
+  columnComments: Record<string, string>
   rows: Record<string, unknown>[]
   rowCount: number
   executionTime: number
