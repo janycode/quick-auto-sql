@@ -60,7 +60,6 @@
         class="ai-question-input"
         v-model="question"
         type="textarea"
-        :autosize="{ minRows: 2, maxRows: 5 }"
         placeholder="输入自然语言描述，如：查询所有用户的订单数量"
         :disabled="generating"
         resize="none"
@@ -414,7 +413,8 @@ defineExpose({ setCheckedTables })
     border-top: 1px solid #e4e7ed;
 
     :deep(.ai-question-input .el-textarea__inner) {
-      height: 100px;
+      height: 100px !important;
+      min-height: 100px;
     }
   }
 
