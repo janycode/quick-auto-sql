@@ -40,4 +40,7 @@ declare module 'vue' {
     TableInfo: typeof import('./components/database/TableInfo.vue')['default']
     TableSelector: typeof import('./components/ai/TableSelector.vue')['default']
   }
+  export interface GlobalDirectives {
+    vLoading: typeof import('element-plus/es')['ElLoadingDirective']
+  }
 }

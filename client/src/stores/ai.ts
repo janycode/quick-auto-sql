@@ -1,25 +1,84 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import type { IAiConfig } from '@/api/ai'
+import { computed, ref } from 'vue'
+import type { IAiConfig, IAiConfigStoreData, IAiHistory } from '@/api/ai'
 import * as aiApi from '@/api/ai'
 
 export const useAiStore = defineStore('ai', () => {
-  const config = ref<IAiConfig>({
-    apiKey: '',
-    apiUrl: 'https://api.deepseek.com/v1/chat/completions',
-    model: 'deepseek-chat',
-  })
+  // AI 配置列表（含 activeId）
+  const configStore = ref<IAiConfigStoreData>({ configs: [], activeId: null })
   const generating = ref(false)
   const generatedSql = ref('')
+  const history = ref<IAiHistory[]>([])
 
-  async function fetchConfig() {
-    const res = await aiApi.getAiConfig()
-    config.value = res.data || config.value
+  // 当前激活的配置（兼容旧版 aiStore.config 用法）
+  const config = computed<IAiConfig>(() => {
+    const activeId = configStore.value.activeId
+    if (!activeId) {
+      return { id: '', apiKey: '', apiUrl: '', model: '', createdAt: '' }
+    }
+    return configStore.value.configs.find(c => c.id === activeId)
+      || { id: '', apiKey: '', apiUrl: '', model: '', createdAt: '' }
+  })
+
+  // 拉取配置列表（兼容旧版 fetchConfig）
+  async function fetchConfigList() {
+    const res = await aiApi.getAiConfigList()
+    configStore.value = res.data || { configs: [], activeId: null }
   }
 
-  async function saveConfig(data: Partial<IAiConfig>) {
-    const res = await aiApi.updateAiConfig(data)
-    config.value = res.data
+  // 兼容旧版 fetchConfig
+  async function fetchConfig() {
+    return fetchConfigList()
+  }
+
+  // 新增配置
+  async function addConfig(data: { apiKey: string; apiUrl?: string; model?: string }) {
+    const res = await aiApi.addAiConfig(data)
+    configStore.value = res.data || configStore.value
+  }
+
+  // 删除配置
+  async function deleteConfig(id: string) {
+    const res = await aiApi.deleteAiConfig(id)
+    configStore.value = res.data || configStore.value
+  }
+
+  // 激活配置
+  async function activateConfig(id: string) {
+    const res = await aiApi.activateAiConfig(id)
+    configStore.value = res.data || configStore.value
+  }
+
+  // 获取历史
+  async function fetchHistory(connectionId?: string) {
+    const res = await aiApi.getAiHistory(connectionId ? { connectionId } : undefined)
+    history.value = res.data || []
+  }
+
+  // 新增历史
+  async function addHistory(data: {
+    connectionId: string
+    database: string
+    tables: string[]
+    question: string
+    sql: string
+  }) {
+    const res = await aiApi.createAiHistory(data)
+    if (res.data) {
+      history.value = [res.data, ...history.value]
+    }
+  }
+
+  // 删除单条
+  async function removeHistory(id: string) {
+    await aiApi.deleteAiHistory(id)
+    history.value = history.value.filter(h => h.id !== id)
+  }
+
+  // 清空全部
+  async function clearHistory() {
+    await aiApi.clearAiHistory()
+    history.value = []
   }
 
   function setGenerating(value: boolean) {
@@ -39,11 +98,20 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   return {
+    configStore,
     config,
     generating,
     generatedSql,
+    history,
+    fetchConfigList,
     fetchConfig,
-    saveConfig,
+    addConfig,
+    deleteConfig,
+    activateConfig,
+    fetchHistory,
+    addHistory,
+    removeHistory,
+    clearHistory,
     setGenerating,
     setGeneratedSql,
     appendGeneratedSql,

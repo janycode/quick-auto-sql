@@ -1,19 +1,134 @@
-import { IAiConfig, IAiGenerateRequest, ISseMessage } from '../types';
-import { aiConfigStore } from '../store/json-store';
+import { v4 as uuidv4 } from 'uuid';
+import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage } from '../types';
+import { aiConfigStore, aiHistoryStore, readActiveAiConfig } from '../store/json-store';
 import { getTablesSchemaForAI } from './database';
 import { config } from '../config';
 
-// 获取 AI 配置
-export function getAiConfig(): IAiConfig {
-  return aiConfigStore.read() as IAiConfig;
+// AI 模型服务商 registry — 新增 LongCat 等提供商时在此加一条即可
+export const AI_PROVIDERS: IAiProvider[] = [
+  {
+    name: 'deepseek',
+    displayName: 'DeepSeek',
+    chatUrl: 'https://api.deepseek.com/v1/chat/completions',
+    modelsUrl: 'https://api.deepseek.com/models',
+    defaultModel: 'deepseek-chat',
+  },
+  {
+    name: 'longcat',
+    displayName: 'LongCat',
+    chatUrl: 'https://api.longcat.chat/openai/v1/chat/completions',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models',
+    defaultModel: 'LongCat-2.0-Preview',
+  },
+];
+
+// 获取所有 provider
+export function getAiProviders(): IAiProvider[] {
+  return AI_PROVIDERS;
 }
 
-// 更新 AI 配置
-export function updateAiConfig(updates: Partial<IAiConfig>): IAiConfig {
-  const current = aiConfigStore.read() as IAiConfig;
-  const updated = { ...current, ...updates };
-  aiConfigStore.write(updated);
-  return updated;
+// 根据 name 查 provider
+export function getAiProvider(name: string): IAiProvider | undefined {
+  return AI_PROVIDERS.find(p => p.name.toLowerCase() === name.toLowerCase());
+}
+
+// 拉取指定 provider 的模型列表（代理官方 /models 接口，统一返回 string[]）
+// providerName: 内置服务商名称；若为空则必须传 modelsUrl
+// apiKey: 必填
+// modelsUrl: 可选，自定义服务商时直接使用传入的 URL
+export async function fetchAiModels(providerName: string | undefined, apiKey: string, modelsUrl?: string): Promise<string[]> {
+  if (!apiKey) {
+    throw new Error('API Key 必填');
+  }
+
+  let url: string | undefined = modelsUrl;
+  if (!url && providerName) {
+    const provider = getAiProvider(providerName);
+    if (provider) url = provider.modelsUrl;
+  }
+  if (!url) {
+    throw new Error('未找到服务商，请选择内置服务商或填写获取模型URL');
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`模型列表拉取失败: ${response.status} ${text}`);
+  }
+
+  const data = (await response.json()) as any;
+  // OpenAI 兼容格式：{ object: "list", data: [{ id, ... }] }
+  if (data && Array.isArray(data.data)) {
+    return data.data
+      .filter((m: any) => m && typeof m.id === 'string')
+      .map((m: any) => m.id);
+  }
+
+  throw new Error('模型列表响应格式不兼容');
+}
+
+// 获取 AI 配置列表（含 activeId）
+export function getAiConfigList(): IAiConfigStoreData {
+  return aiConfigStore.read();
+}
+
+// 获取当前激活的 AI 配置
+export function getActiveAiConfig(): IAiConfig | null {
+  return readActiveAiConfig();
+}
+
+// 新增 AI 配置（首个配置自动激活）
+export function addAiConfig(input: IAiConfigCreate): IAiConfigStoreData {
+  const data = aiConfigStore.read();
+  const newItem: IAiConfig = {
+    id: uuidv4(),
+    apiKey: input.apiKey,
+    apiUrl: input.apiUrl || config.deepseek.apiUrl,
+    model: input.model || config.deepseek.model,
+    createdAt: new Date().toISOString(),
+  };
+  data.configs.push(newItem);
+  // 若之前没有激活配置，则自动激活新加的
+  if (!data.activeId) {
+    data.activeId = newItem.id;
+  }
+  aiConfigStore.write(data);
+  return data;
+}
+
+// 删除 AI 配置
+export function deleteAiConfig(id: string): IAiConfigStoreData {
+  const data = aiConfigStore.read();
+  const index = data.configs.findIndex(c => c.id === id);
+  if (index === -1) {
+    throw new Error('配置不存在');
+  }
+  data.configs.splice(index, 1);
+  // 若删除的是激活配置，则清空 activeId
+  if (data.activeId === id) {
+    data.activeId = null;
+  }
+  aiConfigStore.write(data);
+  return data;
+}
+
+// 激活指定 AI 配置
+export function activateAiConfig(id: string): IAiConfigStoreData {
+  const data = aiConfigStore.read();
+  const exists = data.configs.some(c => c.id === id);
+  if (!exists) {
+    throw new Error('配置不存在');
+  }
+  data.activeId = id;
+  aiConfigStore.write(data);
+  return data;
 }
 
 // 构建 SQL 生成 Prompt
@@ -30,11 +145,12 @@ ${question}
 ## 严格要求
 1. 只返回一条可执行的 SQL 语句，不要包含任何解释说明、注释或 markdown 格式
 2. SQL 必须兼容 MySQL 语法
-3. **只能使用上面表结构中明确存在的字段，绝对不能编造或猜测任何不存在的字段**
+3. **只能使用上面表结构中明确存在的字段，禁止编造或猜测任何不存在的字段**
 4. 如果涉及多表查询，请使用合适的 JOIN，并确保 JOIN 条件使用正确的关联字段
 5. 添加必要的 WHERE 条件
 6. 对大数据量查询添加 LIMIT
-7. 如果用户问题涉及的信息在提供的表结构中无法满足，请在 SQL 中用注释说明`;
+7. 对生成的SQL进行预先 explain 确认，确保查询性能最高
+8. 如果用户问题涉及的信息在提供的表结构中无法满足，请在 SQL 中用注释说明`;
 }
 
 // SSE 流式生成 SQL
@@ -42,9 +158,9 @@ export async function generateSqlStream(
   request: IAiGenerateRequest,
   onMessage: (msg: ISseMessage) => void
 ): Promise<void> {
-  const aiConfig = getAiConfig();
-  if (!aiConfig.apiKey) {
-    throw new Error('请先配置 AI API Key');
+  const aiConfig = getActiveAiConfig();
+  if (!aiConfig || !aiConfig.apiKey) {
+    throw new Error('请先在 AI 配置中添加并激活配置');
   }
 
   // 获取表结构
@@ -127,4 +243,45 @@ export async function generateSqlStream(
 
   await processStream();
   onMessage({ type: 'done', content: '' });
+}
+
+// ==================== AI 历史对话 ====================
+
+// 获取全部历史（按时间倒序）
+export function getAllHistory(): IAiHistory[] {
+  const items = aiHistoryStore.read() as unknown as IAiHistory[];
+  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+// 根据 connectionId 过滤
+export function getHistoryByConnection(connectionId: string): IAiHistory[] {
+  return getAllHistory().filter(h => h.connectionId === connectionId);
+}
+
+// 新增历史
+export function createHistory(data: IAiHistoryCreate): IAiHistory {
+  const item: IAiHistory = {
+    id: uuidv4(),
+    connectionId: data.connectionId,
+    database: data.database,
+    tables: data.tables,
+    question: data.question,
+    sql: data.sql,
+    createdAt: new Date().toISOString(),
+  };
+  aiHistoryStore.insert(item as any);
+  return item;
+}
+
+// 删除单条
+export function deleteHistory(id: string): boolean {
+  return aiHistoryStore.delete(id);
+}
+
+// 清空全部
+export function clearAllHistory(): number {
+  const items = aiHistoryStore.read();
+  const count = items.length;
+  aiHistoryStore.write([]);
+  return count;
 }

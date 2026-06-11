@@ -270,29 +270,24 @@ onUnmounted(() => {
   }
 
   .resize-handle {
-    height: 8px;
+    height: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f8f9fa;
+    background: #f0f1f2;
     cursor: ns-resize;
     flex-shrink: 0;
     border-bottom: 1px solid #e4e7ed;
-    position: relative;
     user-select: none;
-    /* 扩大可点击区域但保持小尺寸外观 */
-    padding: 6px 0;
-    box-sizing: content-box;
-    background-clip: content-box;
+    transition: none !important;
+    animation: none !important;
 
     &:hover {
       background: #e6f7ff;
-      background-clip: content-box;
     }
 
     &:active {
       background: #409eff;
-      background-clip: content-box;
     }
 
     &:hover .resize-icon .resize-dot,
@@ -302,7 +297,7 @@ onUnmounted(() => {
 
     .resize-icon {
       display: flex;
-      gap: 5px;
+      gap: 4px;
       align-items: center;
       justify-content: center;
       pointer-events: none;
@@ -313,17 +308,6 @@ onUnmounted(() => {
         background: #c0c4cc;
         border-radius: 50%;
       }
-    }
-
-    /* 整条横线都可以拖动 */
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      cursor: ns-resize;
     }
   }
 

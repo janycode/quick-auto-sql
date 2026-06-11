@@ -1,7 +1,7 @@
 # Quick Auto SQL
 
 > 基于大语言模型的智能 SQL 生成与数据库管理工具，通过自然语言一句话生成所需 SQL 语句。
-> 
+>
 > 核心目标：简单、易用。
 
 ## ✨ 功能特性
@@ -9,20 +9,24 @@
 - **数据库连接管理**：支持 MySQL 数据库连接配置、测试、增删改查，密码 AES 加密存储
 - **数据库浏览**：树形结构展示数据库、表、字段，支持查看表结构与 DDL
 - **SQL 查询控制台**：Monaco Editor 语法高亮编辑器，查询结果表格展示，支持 CSV 导出，可拖拽调整高度
-- **AI SQL 生成**：基于 DeepSeek 大模型，通过自然语言描述自动生成格式化的 SQL 语句
+- **AI SQL 生成**：支持多 AI 服务商（DeepSeek / LongCat / 自定义 OpenAI 兼容接口），通过自然语言描述自动生成格式化的 SQL 语句
   - SSE 流式输出，实时看到生成过程
   - 自动注入选中表的完整结构信息（DDL + 字段注释），确保 SQL 字段准确
+  - 自动拉取服务商模型列表，支持手动输入模型名
+- **多套 AI 配置**：可同时保存多组 API Key / Base URL / Model，一键切换激活配置
+- **AI 对话历史**：自动记录每次生成，支持按连接过滤、逐条删除、一键清空
 - **持久化状态**：连接选择、数据库选择自动持久化到本地存储，刷新页面不丢失
 - **表勾选自动同步**：侧边栏勾选的表自动显示在 AI 助手关联表区域
+- **SQL 安全限制**：执行接口禁止 DDL / 权限操作（DROP、TRUNCATE、ALTER、GRANT、REVOKE）
 
 ## 🏗 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript + Vite + Vue Router + Pinia + Element Plus + Monaco Editor |
+| 前端 | Vue 3 + TypeScript + Vite + Vue Router + Pinia + Element Plus + Monaco Editor + Axios |
 | 后端 | Node.js + TypeScript + Express + MySQL2 |
-| AI | DeepSeek API（`/chat/completions` 兼容 OpenAI 协议） |
-| 数据存储 | 连接配置和 AI 配置通过本地 JSON 文件持久化 |
+| AI | 任意 OpenAI `/chat/completions` 兼容接口（内置 DeepSeek、LongCat 等） |
+| 数据存储 | 连接配置、AI 配置、AI 历史通过本地 JSON 文件持久化 |
 
 ## 📁 项目结构
 
@@ -30,26 +34,26 @@
 quick-auto-sql/
 ├── server/                      # 后端服务
 │   ├── src/
-│   │   ├── app.ts               # 应用入口
-│   │   ├── config/              # 配置（AES 密钥、端口等）
+│   │   ├── app.ts               # 应用入口 + /api/health 健康检查
+│   │   ├── config/              # 环境变量（端口、加密密钥、默认模型、查询参数等）
 │   │   ├── routes/              # 4 个路由模块
-│   │   │   ├── connection.ts    # 连接管理
-│   │   │   ├── database.ts      # 数据库/表/字段浏览
-│   │   │   ├── query.ts         # SQL 查询
-│   │   │   └── ai.ts            # AI SQL 生成
+│   │   │   ├── connection.ts    # 连接管理（CRUD + 测试）
+│   │   │   ├── database.ts      # 数据库/表/字段浏览 + DDL
+│   │   │   ├── query.ts         # SQL 查询（含 DDL 安全拦截）
+│   │   │   └── ai.ts            # AI 服务商 + 多配置管理 + 历史 + 流式生成
 │   │   ├── services/            # 4 个服务模块（业务逻辑）
 │   │   ├── middleware/          # 错误处理 + async 包装
-│   │   ├── store/               # JSON 文件持久化存储
-│   │   └── types/               # TypeScript 类型定义
+│   │   ├── store/               # JSON 文件持久化存储（含旧版 AI 配置迁移）
+│   │   └── types/               # TypeScript 类型定义（含 Provider、History 等）
 │   └── data/                    # 运行时数据目录（自动创建）
 │
 └── client/                      # 前端应用
     └── src/
-        ├── api/                 # API 请求层（4 个模块）
-        ├── stores/              # Pinia 状态管理（连接/数据库/AI）
-        ├── views/               # 页面视图（连接管理/工作区/AI 配置）
+        ├── api/                 # API 请求层（4 个模块，含 AI Provider、Config、History）
+        ├── stores/              # Pinia 状态管理（连接/数据库/AI 多配置 + 历史）
+        ├── views/               # 页面视图（工作区 / 连接管理弹窗 / AI 设置）
         ├── components/          # 可复用组件（布局/数据库/编辑器/AI）
-        ├── router/              # 路由配置
+        ├── router/              # 路由配置：/workspace、/settings/ai
         ├── styles/              # 全局样式
         └── utils/               # request / SSE / SQL 格式化
 ```
@@ -71,6 +75,16 @@ npm run dev
 # 服务启动在 http://localhost:3000
 ```
 
+可选：在 `server/.env` 中自定义以下配置（均有默认值）：
+
+```
+PORT=3000
+ENCRYPT_KEY=your-encrypt-key
+DATA_DIR=./data
+DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
+DEEPSEEK_MODEL=deepseek-chat
+```
+
 ### 启动前端
 
 ```bash
@@ -82,20 +96,35 @@ pnpm dev
 
 前端 Vite 已配置代理：`/api/**` 自动转发到后端 `http://localhost:3000`。
 
+### 健康检查
+
+后端启动后可访问 `GET http://localhost:3000/api/health` 验证服务状态。
+
 ## 📖 使用流程
 
-1. **打开应用** → 进入"连接管理"，添加一个 MySQL 数据库连接
-2. **切换到"工作区"** → 左侧选择连接和数据库，展开表结构
-3. **勾选表** → 在左侧树形结构中勾选需要查询的表
+1. **打开应用** → 进入"工作区"，在左侧点击按钮打开"连接管理"弹窗，添加一个 MySQL 数据库连接
+2. **选择连接和数据库** → 左侧选择已保存的连接，展开数据库与表结构
+3. **勾选表** → 在左侧树形结构中勾选需要查询的表（表会自动同步到右侧 AI 面板）
 4. **AI 生成 SQL** → 右侧 AI 助手中输入自然语言描述，点击"生成 SQL"，表结构信息会自动注入提示词
 5. **使用 SQL** → 生成完成后点击"使用 SQL"，SQL 自动填入编辑器，点击"执行"即可查询
 
-## 🤖 AI 配置
+## 🤖 AI 配置（多配置 · 多服务商）
 
-1. 进入"AI 配置"页面
-2. 填入 DeepSeek API Key（获取地址：<https://platform.deepseek.com>）
-3. 可选修改：Base URL、Model、Temperature、Max Tokens
-4. 点击"保存配置"
+1. 进入 `/settings/ai` 页面
+2. 选择一个服务商标签（DeepSeek / LongCat / 自定义），或点击"+ 自定义"接入任意 OpenAI 兼容接口
+3. 填写 API Key、API URL、获取模型 URL（自定义服务商时必填）
+4. 输入 API Key 后失焦或点击选择其他服务商时，会通过后端代理自动拉取模型列表
+5. 手动选择或输入模型名，点击"添加配置"
+6. 在上方列表中点击"使用"切换当前激活配置，或点击"×"删除
+
+### 内置 AI 服务商
+
+| 名称 | chatUrl | modelsUrl | 默认模型 |
+|------|---------|-----------|----------|
+| DeepSeek | `https://api.deepseek.com/v1/chat/completions` | `https://api.deepseek.com/models` | `deepseek-chat` |
+| LongCat | `https://api.longcat.chat/openai/v1/chat/completions` | `https://api.longcat.chat/openai/v1/models` | `LongCat-2.0-Preview` |
+
+> 自定义服务商时，chatUrl 必须返回与 OpenAI `/chat/completions` 兼容的 JSON；支持 stream=true。
 
 ### Prompt 设计要点
 
@@ -105,30 +134,79 @@ pnpm dev
 
 ## 🔧 API 接口
 
-| 模块 | 方法 | 路径 | 说明 |
-|------|------|------|------|
-| 连接 | GET | `/api/connections` | 获取连接列表 |
-| 连接 | POST | `/api/connections` | 创建连接 |
-| 连接 | PUT | `/api/connections/:id` | 更新连接 |
-| 连接 | DELETE | `/api/connections/:id` | 删除连接 |
-| 连接 | POST | `/api/connections/test` | 测试连接 |
-| 连接 | POST | `/api/connections/:id/test` | 测试已保存的连接 |
-| 数据库 | GET | `/api/databases/:connectionId` | 获取数据库列表 |
-| 数据库 | GET | `/api/databases/:connectionId/:database/tables` | 获取表列表 |
-| 数据库 | GET | `/api/databases/:connectionId/:database/:table/columns` | 获取字段列表 |
-| 数据库 | GET | `/api/databases/:connectionId/:database/:table/ddl` | 获取 DDL |
-| 查询 | POST | `/api/query/execute` | 执行 SQL |
-| AI | GET | `/api/ai/config` | 获取 AI 配置 |
-| AI | POST | `/api/ai/config` | 保存 AI 配置 |
-| AI | POST | `/api/ai/generate` | 生成 SQL（SSE 流式） |
-| AI | POST | `/api/ai/test` | 测试 AI 配置 |
+统一响应格式：`{ code: number, message: string, data: T }`。`code === 0` 表示成功，非 0 为失败并附带 message。
+
+### 连接
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/connections` | 获取连接列表 |
+| POST | `/api/connections` | 创建连接 |
+| PUT | `/api/connections/:id` | 更新连接 |
+| DELETE | `/api/connections/:id` | 删除连接 |
+| POST | `/api/connections/test` | 测试未保存的连接 |
+| POST | `/api/connections/:id/test` | 测试已保存的连接 |
+
+### 数据库（query 参数）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/databases?connectionId=xxx` | 获取数据库列表 |
+| GET | `/api/databases/tables?connectionId=xxx&database=xxx` | 获取表列表 |
+| GET | `/api/databases/columns?connectionId=xxx&database=xxx&table=xxx` | 获取字段列表 |
+| GET | `/api/databases/ddl?connectionId=xxx&database=xxx&table=xxx` | 获取 DDL |
+
+### 查询
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/query/execute` | 执行 SQL（body: `{ connectionId, database, sql }`，默认限制最多 1000 行 / 30s 超时，禁止 DDL 与权限操作） |
+
+### AI · 服务商 & 模型
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ai/providers` | 获取内置 AI 服务商列表 |
+| POST | `/api/ai/models` | 通过后端代理拉取指定服务商/自定义 URL 的模型列表（body: `{ provider, apiKey, modelsUrl? }`） |
+
+### AI · 多配置管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ai/configs` | 获取配置列表（含 `activeId`） |
+| GET | `/api/ai/config` | 获取当前激活的单条配置 |
+| POST | `/api/ai/configs` | 新增配置（body: `{ apiKey, apiUrl?, model? }`；首个配置自动激活） |
+| DELETE | `/api/ai/configs/:id` | 删除配置 |
+| POST | `/api/ai/configs/:id/activate` | 激活指定配置 |
+
+> 历史遗留的单对象 `ai-config.json` 会在首次启动时自动迁移为多配置格式。
+
+### AI · 历史对话
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ai/history` | 获取全部历史；可选 `?connectionId=xxx` 过滤 |
+| POST | `/api/ai/history` | 新增一条历史（body: `{ connectionId, database, tables, question, sql }`） |
+| DELETE | `/api/ai/history/:id` | 删除单条历史 |
+| DELETE | `/api/ai/history` | 清空全部历史 |
+
+### AI · SQL 生成
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/ai/generate` | 流式生成 SQL（SSE，Content-Type: `text/event-stream`；body: `{ connectionId, database, tables, question }`） |
+
+SSE 事件消息结构：`{ type: 'thinking' | 'sql' | 'done' | 'error', content: string }`。
 
 ## 🗂 数据存储
 
-- 所有配置保存在 `server/data/` 目录下的 JSON 文件中
-- `connections.json`：数据库连接信息（密码 AES 加密）
-- `ai-config.json`：AI API 配置
-- 数据仅存储在本地，不会上传到任何第三方服务
+所有配置与历史均保存在 `server/data/` 目录下的 JSON 文件中（可通过 `DATA_DIR` 环境变量更改）：
+
+- `connections.json` — 数据库连接信息（密码 AES 加密）
+- `ai-config.json` — AI 配置（多配置列表 + 当前激活 ID；兼容旧版单对象并自动迁移）
+- `ai-history.json` — AI 生成历史记录
+
+数据仅存储在本地，不会上传到任何第三方服务。
 
 ## 📝 License
 

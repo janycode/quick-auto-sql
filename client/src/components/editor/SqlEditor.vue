@@ -138,7 +138,8 @@ defineExpose({ setSql })
 
 <style scoped lang="scss">
 .editor-area {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 
@@ -148,10 +149,12 @@ defineExpose({ setSql })
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .editor-content {
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     overflow: hidden;
   }
 }

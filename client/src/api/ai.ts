@@ -1,17 +1,103 @@
 import request from '@/utils/request'
 
+// AI 单条配置
 export interface IAiConfig {
+  id: string
   apiKey: string
   apiUrl: string
   model: string
+  createdAt: string
 }
 
-// 获取 AI 配置
-export function getAiConfig() {
-  return request.get<any, { code: number; data: IAiConfig }>('/ai/config')
+// AI 配置存储（含 activeId）
+export interface IAiConfigStoreData {
+  configs: IAiConfig[]
+  activeId: string | null
 }
 
-// 更新 AI 配置
-export function updateAiConfig(data: Partial<IAiConfig>) {
-  return request.put<any, { code: number; data: IAiConfig }>('/ai/config', data)
+// AI 历史对话
+export interface IAiHistory {
+  id: string
+  connectionId: string
+  database: string
+  tables: string[]
+  question: string
+  sql: string
+  createdAt: string
+}
+
+// 获取 AI 配置列表（含 activeId）
+export function getAiConfigList() {
+  return request.get<any, { code: number; data: IAiConfigStoreData }>('/ai/configs')
+}
+
+// 获取当前激活的 AI 配置
+export function getActiveAiConfig() {
+  return request.get<any, { code: number; data: IAiConfig | null }>('/ai/config')
+}
+
+// 新增 AI 配置
+export function addAiConfig(data: { apiKey: string; apiUrl?: string; model?: string }) {
+  return request.post<any, { code: number; data: IAiConfigStoreData }>('/ai/configs', data)
+}
+
+// 删除 AI 配置
+export function deleteAiConfig(id: string) {
+  return request.delete<any, { code: number; data: IAiConfigStoreData }>(`/ai/configs/${id}`)
+}
+
+// 激活 AI 配置
+export function activateAiConfig(id: string) {
+  return request.post<any, { code: number; data: IAiConfigStoreData }>(`/ai/configs/${id}/activate`)
+}
+
+// ==================== AI 历史对话 ====================
+
+// 获取历史
+export function getAiHistory(params?: { connectionId?: string }) {
+  return request.get<any, { code: number; data: IAiHistory[] }>('/ai/history', { params })
+}
+
+// 新增历史
+export function createAiHistory(data: {
+  connectionId: string
+  database: string
+  tables: string[]
+  question: string
+  sql: string
+}) {
+  return request.post<any, { code: number; data: IAiHistory }>('/ai/history', data)
+}
+
+// 删除单条
+export function deleteAiHistory(id: string) {
+  return request.delete<any, { code: number; data: boolean }>(`/ai/history/${id}`)
+}
+
+// 清空全部
+export function clearAiHistory() {
+  return request.delete<any, { code: number; data: number }>('/ai/history')
+}
+
+// ==================== AI 服务商（Provider）====================
+
+// AI 模型服务商
+export interface IAiProvider {
+  name: string
+  displayName: string
+  chatUrl: string
+  modelsUrl: string
+  defaultModel: string
+}
+
+// 获取服务商列表
+export function getAiProviders() {
+  return request.get<any, { code: number; data: IAiProvider[] }>('/ai/providers')
+}
+
+// 拉取指定服务商的模型列表（走后端代理，避免 CORS）
+// provider 传内置名称（如 'deepseek'）或 'custom' 走自定义 modelsUrl
+// modelsUrl 仅自定义服务商时必填
+export function fetchAiModels(provider: string, apiKey: string, modelsUrl?: string) {
+  return request.post<any, { code: number; data: string[] }>('/ai/models', { provider, apiKey, modelsUrl })
 }
