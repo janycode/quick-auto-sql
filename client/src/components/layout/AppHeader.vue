@@ -7,8 +7,8 @@
       </div>
       <div class="header-actions">
         <el-button
-          :type="isWorkspace ? 'primary' : 'text'"
-          :plain="!isWorkspace"
+          :type="isWorkspace ? 'primary' : 'default'"
+          :link="!isWorkspace"
           size="small"
           @click="$router.push('/workspace')"
         >
@@ -16,8 +16,8 @@
           工作区
         </el-button>
         <el-button
-          :type="isAiSettings ? 'primary' : 'text'"
-          :plain="!isAiSettings"
+          :type="isAiSettings ? 'primary' : 'default'"
+          :link="!isAiSettings"
           size="small"
           @click="$router.push('/settings/ai')"
         >
@@ -25,8 +25,8 @@
           AI 配置
         </el-button>
         <el-button
-          :type="isPromptSettings ? 'primary' : 'text'"
-          :plain="!isPromptSettings"
+          :type="isPromptSettings ? 'primary' : 'default'"
+          :link="!isPromptSettings"
           size="small"
           @click="$router.push('/settings/prompts')"
         >

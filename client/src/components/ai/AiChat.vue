@@ -4,7 +4,7 @@
       <el-icon><ChatDotRound /></el-icon>
       <span>AI SQL 对话</span>
       <div style="flex: 1" />
-      <el-button size="small" text @click="handleOpenHistory">
+      <el-button size="small" link @click="handleOpenHistory">
         <el-icon><Clock /></el-icon>
         <span style="margin-left: 2px">历史</span>
       </el-button>
@@ -22,7 +22,7 @@
           <el-button
             v-if="selectedTables.length > 0"
             type="danger"
-            text
+            link
             size="small"
             @click="handleClear"
           >
@@ -94,7 +94,7 @@
           />
           <el-button
             type="danger"
-            text
+            link
             :disabled="!aiStore.history.length"
             @click="handleClearAllHistory"
           >
@@ -132,7 +132,7 @@
             <div class="history-actions">
               <el-button size="small" @click="viewSql(item)">查看SQL</el-button>
               <el-button size="small" type="primary" @click="useSqlFromHistory(item)">使用SQL</el-button>
-              <el-button size="small" type="danger" text @click="handleDeleteHistory(item)">
+              <el-button size="small" type="danger" link @click="handleDeleteHistory(item)">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>

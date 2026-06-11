@@ -13,8 +13,8 @@
         <span>查询结果: {{ result.rowCount }} 行</span>
         <span>耗时: {{ result.executionTime }}ms</span>
         <div style="flex: 1" />
-        <el-button size="small" text @click="handleResizeReset">重置高度</el-button>
-        <el-button size="small" text @click="handleExport">导出 CSV</el-button>
+        <el-button size="small" link @click="handleResizeReset">重置高度</el-button>
+        <el-button size="small" link @click="handleExport">导出 CSV</el-button>
         <el-button size="small" :type="showComments ? 'primary' : 'default'" @click="toggleShowComments">
           列备注
         </el-button>

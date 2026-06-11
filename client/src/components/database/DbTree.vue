@@ -42,6 +42,9 @@
           <span class="table-icon-wrapper" @click.stop="showTableStructure(data.database, data.table, data.comment)">
             <el-icon :size="14" class="table-icon"><Grid /></el-icon>
           </span>
+          <span class="copy-icon-wrapper" @click.stop="copyTableName(data.table, data.key)" title="复制表名">
+            <el-icon :size="12" class="copy-icon"><Check v-if="copiedTableKey === data.key" /><CopyDocument v-else /></el-icon>
+          </span>
           <span style="margin-left: 4px">{{ node.label }}</span>
           <span v-if="data.comment" class="tree-comment">{{ data.comment }}</span>
         </div>
@@ -136,7 +139,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
-import { Coin, Grid, Key, Document, Search } from '@element-plus/icons-vue'
+import { Coin, Grid, Key, Document, Search, CopyDocument, Check } from '@element-plus/icons-vue'
 import { useDatabaseStore } from '@/stores/database'
 import * as databaseApi from '@/api/database'
 import hljs from 'highlight.js'
@@ -160,6 +163,7 @@ const treeData = ref<any[]>([])
 const expandedKeys = ref<string[]>([])
 const searchText = ref<Record<string, string>>({})
 const originalTablesMap = ref<Record<string, any[]>>({})
+const copiedTableKey = ref<string>('')
 
 // 表结构弹窗相关
 const showTableModal = ref(false)
@@ -432,6 +436,27 @@ function updateTableInfoPosition(event: MouseEvent) {
   }
 }
 
+async function copyTableName(tableName: string, tableKey: string) {
+  try {
+    await navigator.clipboard.writeText(tableName)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = tableName
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+  copiedTableKey.value = tableKey
+  setTimeout(() => {
+    if (copiedTableKey.value === tableKey) {
+      copiedTableKey.value = ''
+    }
+  }, 1500)
+}
+
 function handleCheck() {
   const checkedNodes = treeRef.value?.getCheckedNodes() || []
   const tables = checkedNodes
@@ -477,6 +502,29 @@ defineExpose({
 
   .table-icon {
     color: #409eff;
+  }
+
+  .copy-icon-wrapper {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 2px;
+    opacity: 0.5;
+    transition: opacity 0.2s, transform 0.2s;
+
+    &:hover {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+
+    &:active {
+      transform: scale(0.9);
+    }
+  }
+
+  .copy-icon {
+    color: #67c23a;
   }
 
   .tree-comment {

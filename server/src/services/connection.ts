@@ -102,19 +102,56 @@ export function deleteConnection(id: string): boolean {
   return connectionStore.delete(id);
 }
 
+// MySQL 连接失败相关错误码（与 database.ts / query.ts 保持一致）
+const MYSQL_UNAVAILABLE_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'PROTOCOL_CONNECTION_LOST',
+  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+]);
+
+function wrapMySqlError(error: any): Error {
+  if (!error) return new Error('未知错误');
+  const code = String(error.code || '').toUpperCase();
+  const message = String(error.sqlMessage || error.message || '连接失败');
+
+  if (MYSQL_UNAVAILABLE_CODES.has(code) || /connect.*mysql|mysql.*connect|econnrefused|access denied for user/i.test(message)) {
+    const wrapped: any = new Error('未发现可用的mysql服务，请启动服务后刷新重试');
+    wrapped.code = 'MYSQL_UNAVAILABLE';
+    return wrapped;
+  }
+
+  const wrapped: any = new Error(message);
+  if (error.code) wrapped.code = error.code;
+  if (error.errno !== undefined) wrapped.errno = error.errno;
+  return wrapped;
+}
+
 // 测试连接
 export async function testConnection(data: IConnectionCreate): Promise<boolean> {
-  const tempConnection = await mysql.createConnection({
-    host: data.host,
-    port: data.port,
-    user: data.username,
-    password: data.password,
-    database: data.database || undefined,
-    connectTimeout: 5000,
-  });
-  await tempConnection.ping();
-  await tempConnection.end();
-  return true;
+  let tempConnection: mysql.Connection | null = null;
+  try {
+    tempConnection = await mysql.createConnection({
+      host: data.host,
+      port: data.port,
+      user: data.username,
+      password: data.password,
+      database: data.database || undefined,
+      connectTimeout: 5000,
+    });
+    await tempConnection.ping();
+    await tempConnection.end();
+    return true;
+  } catch (error) {
+    if (tempConnection) {
+      tempConnection.end().catch(() => { /* noop */ });
+    }
+    throw wrapMySqlError(error);
+  }
 }
 
 // 测试已保存的连接
@@ -122,17 +159,25 @@ export async function testSavedConnection(id: string): Promise<boolean> {
   const connection = connectionStore.findById(id) as IConnection | undefined;
   if (!connection) throw new Error('连接不存在');
 
-  const tempConnection = await mysql.createConnection({
-    host: connection.host,
-    port: connection.port,
-    user: connection.username,
-    password: decryptPassword(connection.password),
-    database: connection.database || undefined,
-    connectTimeout: 5000,
-  });
-  await tempConnection.ping();
-  await tempConnection.end();
-  return true;
+  let tempConnection: mysql.Connection | null = null;
+  try {
+    tempConnection = await mysql.createConnection({
+      host: connection.host,
+      port: connection.port,
+      user: connection.username,
+      password: decryptPassword(connection.password),
+      database: connection.database || undefined,
+      connectTimeout: 5000,
+    });
+    await tempConnection.ping();
+    await tempConnection.end();
+    return true;
+  } catch (error) {
+    if (tempConnection) {
+      tempConnection.end().catch(() => { /* noop */ });
+    }
+    throw wrapMySqlError(error);
+  }
 }
 
 // 清除连接池缓存

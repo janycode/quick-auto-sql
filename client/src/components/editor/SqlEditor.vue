@@ -27,12 +27,12 @@
       <el-button type="warning" size="small" :icon="TrendCharts" @click="handleAnalyze" :loading="analyzing">
         AI SQL 分析
       </el-button>
-      <el-button size="small" text type="primary" @click="handleOpenAnalysisHistory">
+      <el-button size="small" link type="primary" @click="handleOpenAnalysisHistory">
         <el-icon><Clock /></el-icon>
         <span>分析历史</span>
       </el-button>
       <div style="flex: 1" />
-      <el-button size="small" text @click="handleClear">
+      <el-button size="small" link @click="handleClear">
         清空
       </el-button>
     </div>
@@ -838,7 +838,7 @@ async function handleExplain() {
       ? commentLine + lineBreak + original.slice(firstLineMatch[0].length)
       : commentLine + lineBreak + original
     editor.setValue(newContent)
-    ElMessage.success('已在 SQL 首行添加解释注释')
+    ElMessage.success('已添加首行解释')
   } catch (e: any) {
     ElMessage.error(e?.message || 'SQL 解释失败')
   } finally {

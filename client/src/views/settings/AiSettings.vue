@@ -52,7 +52,7 @@
                 <el-button
                   type="danger"
                   size="small"
-                  text
+                  link
                   :icon="Delete"
                   :loading="deletingId === item.id"
                   @click="handleDelete(item.id)"

@@ -3,6 +3,37 @@ import { IQueryResult } from '../types';
 import { getPoolById, getConnectionById } from './connection';
 import { config } from '../config';
 
+// MySQL 连接失败相关错误码，命中时优先把原生 code 透传到 error-handler
+const MYSQL_UNAVAILABLE_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'PROTOCOL_CONNECTION_LOST',
+  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+]);
+
+function wrapMySqlError(error: any): Error {
+  if (!error) return new Error('未知错误');
+  const code = String(error.code || '').toUpperCase();
+  const message = String(error.sqlMessage || error.message || '查询执行失败');
+
+  // 明确是 MySQL 不可用：把 code 透传（error-handler 会识别）
+  if (MYSQL_UNAVAILABLE_CODES.has(code) || /connect.*mysql|mysql.*connect|econnrefused/i.test(message)) {
+    const wrapped: any = new Error('未发现可用的mysql服务，请启动服务后刷新重试');
+    wrapped.code = 'MYSQL_UNAVAILABLE';
+    return wrapped;
+  }
+
+  // 其它业务错误（SQL 语法错误、表不存在等），保持原始语义
+  const wrapped: any = new Error(message);
+  if (error.code) wrapped.code = error.code;
+  if (error.errno !== undefined) wrapped.errno = error.errno;
+  return wrapped;
+}
+
 export async function executeQuery(
   connectionId: string,
   database: string,
@@ -18,7 +49,12 @@ export async function executeQuery(
   if (!pool) throw new Error('连接不存在或未配置');
 
   const startTime = Date.now();
-  const conn = await pool.getConnection();
+  let conn: mysql.PoolConnection | null = null;
+  try {
+    conn = await pool.getConnection();
+  } catch (error) {
+    throw wrapMySqlError(error);
+  }
 
   try {
     await conn.changeUser({ database });
@@ -179,11 +215,10 @@ export async function executeQuery(
       rowCount: 1,
       executionTime,
     };
-  } catch (error: any) {
-    const message = error.sqlMessage || error.message || '查询执行失败';
-    throw new Error(message);
+  } catch (error) {
+    throw wrapMySqlError(error);
   } finally {
-    conn.release();
+    if (conn) conn.release();
   }
 }
 
@@ -196,7 +231,12 @@ export async function explainQuery(
   const pool = getPoolById(connectionId);
   if (!pool) throw new Error('连接不存在或未配置');
 
-  const conn = await pool.getConnection();
+  let conn: mysql.PoolConnection | null = null;
+  try {
+    conn = await pool.getConnection();
+  } catch (error) {
+    throw wrapMySqlError(error);
+  }
   try {
     await conn.changeUser({ database });
 
@@ -210,10 +250,9 @@ export async function explainQuery(
       return result as Record<string, unknown>[];
     }
     return [];
-  } catch (error: any) {
-    const message = error.sqlMessage || error.message || 'EXPLAIN 执行失败';
-    throw new Error(message);
+  } catch (error) {
+    throw wrapMySqlError(error);
   } finally {
-    conn.release();
+    if (conn) conn.release();
   }
 }
