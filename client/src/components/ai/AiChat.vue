@@ -57,6 +57,7 @@
     </div>
     <div class="ai-panel-footer">
       <el-input
+        class="ai-question-input"
         v-model="question"
         type="textarea"
         :autosize="{ minRows: 2, maxRows: 5 }"
@@ -411,6 +412,10 @@ defineExpose({ setCheckedTables })
   .ai-panel-footer {
     padding: 12px;
     border-top: 1px solid #e4e7ed;
+
+    :deep(.ai-question-input .el-textarea__inner) {
+      height: 100px;
+    }
   }
 
   .table-header {
