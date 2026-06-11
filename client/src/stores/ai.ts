@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { IAiConfig, IAiConfigStoreData, IAiHistory } from '@/api/ai'
+import type { IAiConfig, IAiConfigStoreData, IAiHistory, IPromptTemplate, PromptTemplateType } from '@/api/ai'
 import * as aiApi from '@/api/ai'
 
 export const useAiStore = defineStore('ai', () => {
@@ -9,6 +9,8 @@ export const useAiStore = defineStore('ai', () => {
   const generating = ref(false)
   const generatedSql = ref('')
   const history = ref<IAiHistory[]>([])
+  // 提示词模板
+  const promptTemplates = ref<Record<PromptTemplateType, IPromptTemplate> | null>(null)
 
   // 当前激活的配置（兼容旧版 aiStore.config 用法）
   const config = computed<IAiConfig>(() => {
@@ -97,12 +99,41 @@ export const useAiStore = defineStore('ai', () => {
     generatedSql.value = ''
   }
 
+  // 拉取所有提示词模板
+  async function fetchPromptTemplates(force = false) {
+    if (promptTemplates.value && !force) return promptTemplates.value
+    const res = await aiApi.listPromptTemplates()
+    if (res && res.data) {
+      promptTemplates.value = res.data
+    }
+    return promptTemplates.value
+  }
+
+  // 更新单个提示词模板
+  async function updatePromptTemplate(type: PromptTemplateType, prompt: string) {
+    const res = await aiApi.updatePromptTemplate(type, prompt)
+    if (res && res.data && promptTemplates.value) {
+      promptTemplates.value[type] = res.data
+    }
+    return res.data
+  }
+
+  // 重置为默认提示词
+  async function resetPromptTemplate(type: PromptTemplateType) {
+    const res = await aiApi.resetPromptTemplate(type)
+    if (res && res.data && promptTemplates.value) {
+      promptTemplates.value[type] = res.data
+    }
+    return res.data
+  }
+
   return {
     configStore,
     config,
     generating,
     generatedSql,
     history,
+    promptTemplates,
     fetchConfigList,
     fetchConfig,
     addConfig,
@@ -116,5 +147,8 @@ export const useAiStore = defineStore('ai', () => {
     setGeneratedSql,
     appendGeneratedSql,
     clearGeneratedSql,
+    fetchPromptTemplates,
+    updatePromptTemplate,
+    resetPromptTemplate,
   }
 })

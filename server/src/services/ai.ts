@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
-import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage } from '../types';
-import { aiConfigStore, aiHistoryStore, readActiveAiConfig } from '../store/json-store';
+import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage, IPromptTemplate, IPromptTemplateType } from '../types';
+import { aiConfigStore, aiHistoryStore, readActiveAiConfig, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, clearAnalysisCache } from '../store/json-store';
 import { getTablesSchemaForAI } from './database';
+import { explainQuery } from './query';
 import { config } from '../config';
 
 // AI 模型服务商 registry — 新增 LongCat 等提供商时在此加一条即可
@@ -131,53 +132,12 @@ export function activateAiConfig(id: string): IAiConfigStoreData {
   return data;
 }
 
-// 构建 SQL 生成 Prompt
+// 构建 SQL 生成 Prompt（从可配置模板读取，将 ${schema} / ${question} 做占位符替换）
 function buildSqlPrompt(question: string, schema: string): string {
-//   return `你是一个专业的 SQL 生成助手。根据用户的自然语言描述和提供的表结构信息，生成准确的 MySQL SQL 语句。
-
-// ## 数据库表结构
-
-// ${schema}
-
-// ## 用户问题
-// ${question}
-
-// ## 严格要求
-// 1. 只返回一条可执行的 SQL 语句，不要包含任何解释说明、注释或 markdown 格式
-// 2. SQL 必须兼容 MySQL 语法
-// 3. **只能使用上面表结构中明确存在的字段，禁止编造或猜测任何不存在的字段**
-// 4. 如果涉及多表查询，请使用合适的 JOIN，并确保 JOIN 条件使用正确的关联字段
-// 5. 添加必要的 WHERE 条件
-// 6. 对大数据量查询添加 LIMIT
-// 7. 对生成的SQL进行预先 explain 确认，确保查询性能最高
-// 8. 如果用户问题涉及的信息在提供的表结构中无法满足，请在 SQL 中用注释说明`;
-    return `你是专业的MySQL SQL生成专家，严格基于提供的表结构生成准确、高效、可直接执行的SQL语句。
-
-【输入信息】
-### 数据库表结构
-${schema}
-
-### 用户查询需求
-${question}
-
-【核心强制规则（必须100%遵守，违反将导致严重错误）】
-1. 输出要求：仅输出单行纯SQL语句，绝对禁止任何解释、说明、Markdown格式、代码块标记、多余换行。正常生成的SQL中不得出现任何注释。
-2. 语法规范：严格遵循MySQL 5.7+ 语法，如果表名、字段名与MySQL 关键字冲突则必须用反引号\`包裹，一般情况下不需要包裹；字符串统一使用单引号；禁止使用其他数据库专属语法。
-3. 字段约束：只能使用上表中明确存在的表和字段，绝对禁止编造、臆测任何不存在的表名、字段名，如果字段包含了下划线_则必须使用 AS 别名进行小驼峰重命名，不含下划线_则不需要重命名。
-4. 多表查询：必须使用有意义的表别名，所有字段必须携带表别名前缀；JOIN必须携带正确的关联字段，禁止无关联条件的笛卡尔积。
-5. 性能要求：
-   - 禁止使用SELECT *，必须显式列出所需字段
-   - WHERE、JOIN、ORDER BY条件优先使用主键/索引字段
-   - 禁止在WHERE条件的字段上使用函数或运算，避免索引失效
-   - 所有查询默认追加 LIMIT 100，用户明确指定返回数量时按用户要求执行
-6. 安全约束：UPDATE、DELETE语句必须携带WHERE条件，绝对禁止全表更新/删除。
-7. 函数要求：仅使用MySQL原生函数，优先选择性能最优的实现方式。
-
-【异常处理规则】
-若用户需求无法通过提供的表结构实现、缺少必要字段或语义完全无法理解，请仅输出单行内容：
--- 错误：当前表结构无法支持该查询需求
-
-最终仅输出SQL或异常注释，不得有任何其他内容。`
+  const template = getPromptTemplate('generate_sql');
+  return template.prompt
+    .replace(/\$\{schema\}/g, schema)
+    .replace(/\$\{question\}/g, question);
 }
 
 // SSE 流式生成 SQL
@@ -248,7 +208,6 @@ export async function generateSqlStream(
 
           const data = trimmed.slice(6);
           if (data === '[DONE]') {
-            onMessage({ type: 'done', content: '' });
             return;
           }
 
@@ -311,4 +270,153 @@ export function clearAllHistory(): number {
   const count = items.length;
   aiHistoryStore.write([]);
   return count;
+}
+
+// ==================== SQL 性能分析 ====================
+
+function buildAnalyzePrompt(sql: string, explainRows: Record<string, unknown>[]): string {
+  const explainText = explainRows.length
+    ? explainRows.map((r) => JSON.stringify(r)).join('\n')
+    : '（EXPLAIN 未返回结果）';
+  const template = getPromptTemplate('analyze_sql');
+  return template.prompt
+    .replace(/\$\{sql\}/g, sql)
+    .replace(/\$\{explain\}/g, explainText);
+}
+
+function callAiNonStream(aiConfig: IAiConfig, userPrompt: string): Promise<string> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const response = await fetch(aiConfig.apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${aiConfig.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: aiConfig.model,
+          messages: [
+            { role: 'system', content: '你是 MySQL 性能优化专家，只输出简洁的分析文本，不输出 Markdown 代码块，不多寒暄。' },
+            { role: 'user', content: userPrompt },
+          ],
+          stream: false,
+          temperature: 0.2,
+          max_tokens: 1200,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        reject(new Error(`AI API 调用失败: ${response.status} ${text}`));
+        return;
+      }
+
+      const data = (await response.json()) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        reject(new Error('AI 响应格式异常'));
+        return;
+      }
+      resolve(content.trim());
+    } catch (err: any) {
+      reject(err);
+    }
+  });
+}
+
+export async function analyzeSql(
+  connectionId: string,
+  database: string,
+  sql: string
+): Promise<{ explain: Record<string, unknown>[]; analysis: string; cached: boolean; createdAt?: string }> {
+  const aiConfig = getActiveAiConfig();
+  if (!aiConfig || !aiConfig.apiKey) {
+    throw new Error('请先在 AI 配置中添加并激活配置');
+  }
+
+  const trimmedSql = sql.trim();
+  if (!trimmedSql) throw new Error('SQL 不能为空');
+
+  // 命中缓存（SQL 内容未变化时直接返回已有结果，跳过 EXPLAIN + AI 调用）
+  const cached = findAnalysisCache(trimmedSql);
+  if (cached) {
+    return { explain: cached.explain, analysis: cached.analysis, cached: true, createdAt: cached.createdAt };
+  }
+
+  const explainRows = await explainQuery(connectionId, database, trimmedSql);
+  const prompt = buildAnalyzePrompt(trimmedSql, explainRows);
+  const analysis = await callAiNonStream(aiConfig, prompt);
+
+  // 写入缓存，下次相同 SQL 直接复用
+  const entry = saveAnalysisCache(trimmedSql, analysis, explainRows);
+
+  return { explain: explainRows, analysis, cached: false, createdAt: entry.createdAt };
+}
+
+// ==================== SQL 业务解释 ====================
+
+function buildExplainPrompt(sql: string): string {
+  const template = getPromptTemplate('explain_sql');
+  return template.prompt.replace(/\$\{sql\}/g, sql);
+}
+
+export async function explainSql(sql: string): Promise<{ explanation: string }> {
+  const aiConfig = getActiveAiConfig();
+  if (!aiConfig || !aiConfig.apiKey) {
+    throw new Error('请先在 AI 配置中添加并激活配置');
+  }
+
+  const trimmedSql = sql.trim();
+  if (!trimmedSql) throw new Error('SQL 不能为空');
+
+  const prompt = buildExplainPrompt(trimmedSql);
+  const raw = await callAiNonStream(aiConfig, prompt);
+  // 去除首尾空白与多余引号，保证输出可以直接拼到 SQL 注释中
+  let explanation = raw.trim();
+  // 若模型误输出 markdown 代码块，则去除首尾 ```...```
+  const fenceMatch = explanation.match(/```(?:[\s\S]*?)\n([\s\S]*?)```/);
+  if (fenceMatch && fenceMatch[1]) {
+    explanation = fenceMatch[1].trim();
+  }
+  // 去除以 "解释：" / "结论：" 等前缀（若模型违规添加）
+  explanation = explanation.replace(/^(解释[:：]?\s*|结论[:：]?\s*|业务含义[:：]?\s*)/, '').trim();
+  // 去除换行，压缩为单行，长度上限 300 字
+  explanation = explanation.replace(/\r?\n+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 300);
+
+  return { explanation };
+}
+
+export function listAnalysisHistory() {
+  return listAnalysisCache();
+}
+
+export function clearAnalysisHistory(): number {
+  return clearAnalysisCache();
+}
+
+// ==================== 提示词模板管理 ====================
+
+export function listPromptTemplates(): Record<IPromptTemplateType, IPromptTemplate> {
+  return getAllPromptTemplates();
+}
+
+export function getPrompt(type: IPromptTemplateType): IPromptTemplate {
+  return getPromptTemplate(type);
+}
+
+export function updatePrompt(type: IPromptTemplateType, prompt: string): IPromptTemplate {
+  if (!type) throw new Error('type 必填');
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') throw new Error('非法的提示词类型');
+  if (!prompt || !prompt.trim()) throw new Error('提示词不能为空或纯空白');
+  return updatePromptTemplate(type, prompt);
+}
+
+export function resetPrompt(type: IPromptTemplateType): IPromptTemplate {
+  if (!type) throw new Error('type 必填');
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') throw new Error('非法的提示词类型');
+  return resetPromptTemplate(type);
+}
+
+export function defaultPrompt(type: IPromptTemplateType): string {
+  return getDefaultPrompt(type);
 }

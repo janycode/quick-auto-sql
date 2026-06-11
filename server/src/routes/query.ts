@@ -12,9 +12,9 @@ router.post('/execute', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
 
-  // 安全检查：禁止 DDL 操作（第一版简化处理）
+  // 安全检查：禁止 DDL 操作（第一版简化处理），放开 ALTER 操作用于添加索引和改表
   const trimmedSql = sql.trim().toUpperCase();
-  const forbiddenKeywords = ['DROP', 'TRUNCATE', 'ALTER', 'GRANT', 'REVOKE'];
+  const forbiddenKeywords = ['DROP', 'TRUNCATE', 'GRANT', 'REVOKE'];
   for (const keyword of forbiddenKeywords) {
     if (trimmedSql.startsWith(keyword)) {
       fail(res, `不允许执行 ${keyword} 操作`);

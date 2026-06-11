@@ -121,3 +121,13 @@ export interface IAiProvider {
   modelsUrl: string;    // 模型列表接口 (/models)
   defaultModel: string; // 默认模型
 }
+
+// 提示词模板类型
+export type IPromptTemplateType = 'generate_sql' | 'analyze_sql' | 'explain_sql';
+
+// 提示词模板
+export interface IPromptTemplate {
+  type: IPromptTemplateType;
+  prompt: string;
+  updatedAt: string;
+}

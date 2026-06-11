@@ -66,7 +66,9 @@ export function createAiHistory(data: {
   question: string
   sql: string
 }) {
-  return request.post<any, { code: number; data: IAiHistory }>('/ai/history', data)
+  return request.post<any, { code: number; data: IAiHistory }>('/ai/history', data, {
+    _silentError: true,
+  })
 }
 
 // 删除单条
@@ -100,4 +102,63 @@ export function getAiProviders() {
 // modelsUrl 仅自定义服务商时必填
 export function fetchAiModels(provider: string, apiKey: string, modelsUrl?: string) {
   return request.post<any, { code: number; data: string[] }>('/ai/models', { provider, apiKey, modelsUrl })
+}
+
+// ==================== 提示词模板 ====================
+
+export type PromptTemplateType = 'generate_sql' | 'analyze_sql' | 'explain_sql'
+
+export interface IPromptTemplate {
+  type: PromptTemplateType
+  prompt: string
+  updatedAt: string
+}
+
+// 获取所有提示词
+export function listPromptTemplates() {
+  return request.get<any, { code: number; data: Record<PromptTemplateType, IPromptTemplate> }>('/ai/prompts')
+}
+
+// 获取单个提示词
+export function getPromptTemplate(type: PromptTemplateType) {
+  return request.get<any, { code: number; data: IPromptTemplate }>(`/ai/prompts/${type}`)
+}
+
+// 更新提示词（不允许清空）
+export function updatePromptTemplate(type: PromptTemplateType, prompt: string) {
+  return request.put<any, { code: number; data: IPromptTemplate }>(`/ai/prompts/${type}`, { prompt })
+}
+
+// 重置为默认提示词
+export function resetPromptTemplate(type: PromptTemplateType) {
+  return request.post<any, { code: number; data: IPromptTemplate }>(`/ai/prompts/${type}/reset`)
+}
+
+// ==================== SQL 性能分析 ====================
+
+export interface ISqlAnalyzeResult {
+  explain: Record<string, unknown>[]
+  analysis: string
+  cached?: boolean
+  createdAt?: string
+}
+
+export function analyzeSql(data: { connectionId: string; database: string; sql: string }) {
+  return request.post<any, { code: number; data: ISqlAnalyzeResult }>('/ai/analyze', data)
+}
+
+export function getAnalysisHistory() {
+  return request.get<any, { code: number; data: { items: ISqlAnalyzeResult[]; total: number } }>(
+    '/ai/analysis-history'
+  )
+}
+
+export function clearAnalysisHistory() {
+  return request.delete<any, { code: number; data: { cleared: number } }>('/ai/analysis-history')
+}
+
+// ==================== SQL 业务解释 ====================
+
+export function explainSql(data: { sql: string }) {
+  return request.post<any, { code: number; data: { explanation: string } }>('/ai/explain', data)
 }

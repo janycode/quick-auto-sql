@@ -12,13 +12,27 @@
           <Close />
         </el-icon>
       </div>
+      <div v-if="tables.length > 3" class="warning-list">
+        <div class="warning-item">
+          <el-icon><Warning /></el-icon>
+          <span>阿里巴巴嵩山版规范【强制】超过三个表禁止 join！</span>
+        </div>
+        <div v-if="tables.length > 4" class="warning-item">
+          <el-icon><Warning /></el-icon>
+          <span>你真的确定要关联这么多表吗？表数据量确认过吗？</span>
+        </div>
+        <div v-if="tables.length > 5" class="warning-item">
+          <el-icon><Warning /></el-icon>
+          <span>除非报表等低并发场景或误操作，否则强烈不建议！！！</span>
+        </div>
+      </div>
     </template>
     <span v-else class="placeholder">在左侧树中勾选表自动关联</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Close } from '@element-plus/icons-vue'
+import { Close, Warning } from '@element-plus/icons-vue'
 
 defineProps<{
   tables: { table: string; comment: string }[]
@@ -74,6 +88,29 @@ const emit = defineEmits<{
 
     &:hover {
       color: #f56c6c;
+    }
+  }
+
+  .warning-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed #f56c6c;
+  }
+
+  .warning-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: #f56c6c;
+    font-size: 12px;
+    line-height: 1.6;
+
+    .el-icon {
+      flex-shrink: 0;
+      margin-top: 2px;
     }
   }
 

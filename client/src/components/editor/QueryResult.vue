@@ -44,8 +44,7 @@
           >
             <template #header>
               <el-tooltip
-                v-if="getColumnComment(col)"
-                :content="getColumnComment(col)"
+                :content="showComments ? getColumnComment(col) : removeNewlines(col)"
                 placement="top"
                 :show-after="100"
                 popper-class="column-comment-tooltip"
@@ -53,7 +52,6 @@
               >
                 <span class="column-header-text" :class="{ 'first-col-header': colIndex === 0 }">{{ getColumnLabel(col) }}</span>
               </el-tooltip>
-              <span v-else class="column-header-text" :class="{ 'first-col-header': colIndex === 0 }">{{ getColumnLabel(col) }}</span>
             </template>
             <template #default="{ row }">
               <span :style="{ fontWeight: colIndex === 0 ? 600 : 'normal' }">
@@ -93,7 +91,14 @@ function removeNewlines(str: string): string {
 
 function getColumnLabel(col: string): string {
   if (showComments.value && props.result?.columnComments[col]) {
-    return removeNewlines(props.result.columnComments[col]);
+    const fullComment = removeNewlines(props.result.columnComments[col]);
+    // 如果包含冒号，按第一个冒号截断，保留左侧
+    const colonIndex = fullComment.indexOf(':');
+    if (colonIndex > 0) {
+      return fullComment.substring(0, colonIndex).trim();
+    }
+    // 没有冒号，返回完整注释（Element Plus 的 show-overflow-tooltip 会自动添加省略号）
+    return fullComment;
   }
   return removeNewlines(col);
 }

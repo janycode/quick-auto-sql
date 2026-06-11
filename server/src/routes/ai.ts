@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler, success, fail } from '../middleware/async-handler';
 import * as aiService from '../services/ai';
-import { ISseMessage } from '../types';
+import { ISseMessage, IPromptTemplateType } from '../types';
 
 const router = Router();
 
@@ -78,8 +78,14 @@ router.get('/history', asyncHandler(async (req: Request, res: Response) => {
 // 新增历史
 router.post('/history', asyncHandler(async (req: Request, res: Response) => {
   const { connectionId, database, tables, question, sql } = req.body;
-  if (!connectionId || !database || !tables?.length || !question || !sql) {
-    fail(res, '参数不完整');
+  const missing = [];
+  if (!connectionId) missing.push('connectionId');
+  if (!database) missing.push('database');
+  if (!tables || !Array.isArray(tables) || tables.length === 0) missing.push('tables');
+  if (!question || !String(question).trim()) missing.push('question');
+  if (!sql || !String(sql).trim()) missing.push('sql');
+  if (missing.length > 0) {
+    fail(res, `参数不完整，缺少: ${missing.join(', ')}`);
     return;
   }
   const item = aiService.createHistory({ connectionId, database, tables, question, sql });
@@ -130,6 +136,108 @@ router.post('/generate', asyncHandler(async (req: Request, res: Response) => {
     sendSse({ type: 'error', content: error.message });
   } finally {
     res.end();
+  }
+}));
+
+// ==================== 提示词模板管理 ====================
+
+// 获取所有提示词模板
+router.get('/prompts', asyncHandler(async (_req: Request, res: Response) => {
+  success(res, aiService.listPromptTemplates());
+}));
+
+// 获取单个提示词模板
+router.get('/prompts/:type', asyncHandler(async (req: Request, res: Response) => {
+  const type = req.params.type as IPromptTemplateType;
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+    fail(res, '非法的提示词类型');
+    return;
+  }
+  success(res, aiService.getPrompt(type));
+}));
+
+// 更新提示词模板（不允许清空）
+router.put('/prompts/:type', asyncHandler(async (req: Request, res: Response) => {
+  const type = req.params.type as IPromptTemplateType;
+  const { prompt } = req.body || {};
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+    fail(res, '非法的提示词类型');
+    return;
+  }
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+    fail(res, '提示词内容不能为空');
+    return;
+  }
+  try {
+    const updated = aiService.updatePrompt(type, prompt);
+    success(res, updated, '提示词已更新');
+  } catch (err: any) {
+    fail(res, err.message || '提示词更新失败');
+  }
+}));
+
+// 重置为默认提示词
+router.post('/prompts/:type/reset', asyncHandler(async (req: Request, res: Response) => {
+  const type = req.params.type as IPromptTemplateType;
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+    fail(res, '非法的提示词类型');
+    return;
+  }
+  try {
+    const reset = aiService.resetPrompt(type);
+    success(res, reset, '已重置为默认提示词');
+  } catch (err: any) {
+    fail(res, err.message || '提示词重置失败');
+  }
+}));
+
+// SQL 性能分析（先 EXPLAIN，再给 AI 分析）
+router.post('/analyze', asyncHandler(async (req: Request, res: Response) => {
+  const { connectionId, database, sql } = req.body || {};
+  if (!connectionId || !database || !sql) {
+    fail(res, 'connectionId、database 和 sql 参数必填');
+    return;
+  }
+  try {
+    const result = await aiService.analyzeSql(connectionId, database, sql);
+    success(res, result);
+  } catch (error: any) {
+    fail(res, error.message || 'SQL 性能分析失败');
+  }
+}));
+
+// SQL 业务解释（生成中文业务描述，可用于在 SQL 首行添加注释）
+router.post('/explain', asyncHandler(async (req: Request, res: Response) => {
+  const { sql } = req.body || {};
+  if (!sql || !String(sql).trim()) {
+    fail(res, 'sql 参数不能为空');
+    return;
+  }
+  try {
+    const result = await aiService.explainSql(String(sql));
+    success(res, result);
+  } catch (error: any) {
+    fail(res, error.message || 'SQL 解释失败');
+  }
+}));
+
+// 列出所有 SQL 性能分析历史（按时间倒序）
+router.get('/analysis-history', asyncHandler(async (_req: Request, res: Response) => {
+  try {
+    const items = aiService.listAnalysisHistory();
+    success(res, { items, total: items.length });
+  } catch (error: any) {
+    fail(res, error.message || '获取分析历史失败');
+  }
+}));
+
+// 清空 SQL 性能分析历史
+router.delete('/analysis-history', asyncHandler(async (_req: Request, res: Response) => {
+  try {
+    const count = aiService.clearAnalysisHistory();
+    success(res, { cleared: count });
+  } catch (error: any) {
+    fail(res, error.message || '清空分析历史失败');
   }
 }));
 

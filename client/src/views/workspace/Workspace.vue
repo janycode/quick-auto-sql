@@ -14,6 +14,7 @@
           :databases="databases"
           :executing="executing"
           :selected-database="currentDatabase"
+          :connection-id="connectionStore.activeConnection?.id"
           @execute="handleExecute"
           @database-change="handleDatabaseChange"
         />

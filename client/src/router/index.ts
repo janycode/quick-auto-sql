@@ -17,6 +17,11 @@ const router = createRouter({
       name: 'AiSettings',
       component: () => import('@/views/settings/AiSettings.vue'),
     },
+    {
+      path: '/settings/prompts',
+      name: 'PromptSettings',
+      component: () => import('@/views/settings/PromptSettings.vue'),
+    },
   ],
 })
 

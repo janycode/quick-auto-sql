@@ -37,12 +37,12 @@
 
       <!-- AI 输出区域 -->
       <div v-if="generatedSql || generating" class="ai-output">
-        <div v-if="generating && !generatedSql" style="color: #909399; font-size: 13px">
+        <div v-if="generating && !generatedSql" class="ai-loading">
           <el-icon class="is-loading"><Loading /></el-icon>
-          正在生成 SQL...
+          <span class="loading-text">{{ loadingHint }}{{ loadingDots }}</span>
         </div>
         <div v-else class="ai-sql-output">
-          <pre>{{ generatedSql }}</pre>
+          <pre><code v-html="highlightSql(generatedSql)"></code></pre>
         </div>
         <el-button
           v-if="generatedSql && !generating"
@@ -110,7 +110,17 @@
             class="history-item"
           >
             <div class="history-content">
-              <div class="history-question">{{ item.question }}</div>
+              <div class="history-question-row">
+                <el-tooltip content="复制提示词" placement="top">
+                  <el-icon
+                    class="copy-question-icon"
+                    @click.stop="handleCopyQuestion(item.question)"
+                  ><DocumentCopy /></el-icon>
+                </el-tooltip>
+                <el-tooltip :content="item.question" placement="top" :show-after="300">
+                  <div class="history-question">{{ item.question }}</div>
+                </el-tooltip>
+              </div>
               <div class="history-meta">
                 <span>{{ formatTime(item.createdAt) }}</span>
                 <span class="meta-divider">·</span>
@@ -153,8 +163,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { ChatDotRound, Promotion, Loading, Clock, Search, Delete } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import TableSelector from './TableSelector.vue'
@@ -196,6 +206,53 @@ const generating = ref(false)
 const generatedSql = ref('')
 const rawSql = ref('') // 原始未格式化的 SQL
 let abortController: AbortController | null = null
+
+// 动态加载提示
+const loadingHintTexts = [
+  '正在生成 SQL',
+  '正在理解你的需求',
+  '正在分析表结构',
+  '正在拼接关联条件',
+  '正在优化查询计划',
+  '正在为你编写 SQL',
+]
+const loadingHint = ref(loadingHintTexts[0])
+const loadingDots = ref('')
+let loadingTimer: ReturnType<typeof setInterval> | null = null
+let hintTimer: ReturnType<typeof setInterval> | null = null
+
+watch(generating, (val) => {
+  if (val) {
+    // 开始生成时，启动动态提示
+    loadingHint.value = loadingHintTexts[0]
+    loadingDots.value = '.'
+    let dotCount = 1
+    let hintIndex = 0
+    loadingTimer = setInterval(() => {
+      dotCount = (dotCount % 3) + 1
+      loadingDots.value = '.'.repeat(dotCount)
+    }, 500)
+    hintTimer = setInterval(() => {
+      hintIndex = (hintIndex + 1) % loadingHintTexts.length
+      loadingHint.value = loadingHintTexts[hintIndex]
+    }, 3000)
+  } else {
+    // 停止生成后，清理定时器
+    if (loadingTimer) {
+      clearInterval(loadingTimer)
+      loadingTimer = null
+    }
+    if (hintTimer) {
+      clearInterval(hintTimer)
+      hintTimer = null
+    }
+  }
+})
+
+onUnmounted(() => {
+  if (loadingTimer) clearInterval(loadingTimer)
+  if (hintTimer) clearInterval(hintTimer)
+})
 
 // 历史相关
 const showHistoryModal = ref(false)
@@ -300,6 +357,22 @@ async function handleClearAllHistory() {
   }
 }
 
+async function handleCopyQuestion(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    // 降级方案
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    ElMessage.success('已复制到剪贴板')
+  }
+}
+
 async function handleGenerate() {
   if (!question.value.trim()) {
     ElMessage.warning('请输入自然语言描述')
@@ -352,16 +425,18 @@ async function handleGenerate() {
         const finalSql = formatSql(rawSql.value)
         generatedSql.value = finalSql
         generating.value = false
-        // 异步保存到后端
-        aiStore.addHistory({
-          connectionId,
-          database,
-          tables: tableNames,
-          question: currentQuestion,
-          sql: finalSql,
-        }).catch(err => {
-          console.error('保存历史失败:', err)
-        })
+        // 异步保存到后端（仅当生成的 SQL 非空时）
+        if (finalSql && finalSql.trim()) {
+          aiStore.addHistory({
+            connectionId,
+            database,
+            tables: tableNames,
+            question: currentQuestion,
+            sql: finalSql,
+          }).catch(err => {
+            console.error('保存历史失败:', err)
+          })
+        }
       }
     },
     onError: (error) => {
@@ -434,17 +509,55 @@ defineExpose({ setCheckedTables })
 .ai-output {
   margin-top: 12px;
 
+  .ai-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 12px;
+    color: #909399;
+    font-size: 13px;
+    background: #f5f7fa;
+    border-radius: 4px;
+
+    .is-loading {
+      color: #409eff;
+      animation: rotate 1s linear infinite;
+    }
+
+    .loading-text {
+      min-width: 180px;
+    }
+  }
+
   .ai-sql-output {
-    background: #1e1e1e;
-    color: #d4d4d4;
+    background: #f5f7fa;
     padding: 12px;
     border-radius: 4px;
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 13px;
-    line-height: 1.5;
     overflow-x: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
+
+    :deep(pre) {
+      margin: 0;
+      background: transparent;
+    }
+
+    :deep(code) {
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #333;
+      background: transparent;
+      white-space: pre-wrap;
+      word-break: break-all;
+      display: block;
+    }
+
+    :deep(.hljs-keyword) { color: #c7254e; }
+    :deep(.hljs-string) { color: #22863a; }
+    :deep(.hljs-number) { color: #005cc5; }
+    :deep(.hljs-comment) { color: #998; font-style: italic; }
+    :deep(.hljs-built_in), :deep(.hljs-type) { color: #6f42c1; }
+    :deep(.hljs-function) { color: #6f42c1; }
+    :deep(.hljs-title) { color: #6f42c1; }
   }
 }
 
@@ -486,13 +599,34 @@ defineExpose({ setCheckedTables })
   min-width: 0;
 }
 
+.history-question-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.copy-question-icon {
+  font-size: 14px;
+  color: #909399;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.2s;
+
+  &:hover {
+    color: #409eff;
+  }
+}
+
 .history-question {
   font-size: 13px;
   color: #303133;
-  margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+  flex: 1;
+  min-width: 0;
 }
 
 .history-meta {
@@ -538,5 +672,10 @@ defineExpose({ setCheckedTables })
     max-height: 400px;
     overflow-y: auto;
   }
+}
+
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

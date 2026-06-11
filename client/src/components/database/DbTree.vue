@@ -32,7 +32,13 @@
           <span style="margin-left: 4px">{{ node.label }}</span>
           <span v-if="data.comment" class="tree-comment">{{ data.comment }}</span>
         </div>
-        <div v-else-if="data.type === 'table'" class="node-content">
+        <div 
+          v-else-if="data.type === 'table'" 
+          class="node-content table-node"
+          @mouseenter="showTableInfo($event, data)"
+          @mouseleave="hideTableInfo"
+          @mousemove="updateTableInfoPosition($event)"
+        >
           <span class="table-icon-wrapper" @click.stop="showTableStructure(data.database, data.table, data.comment)">
             <el-icon :size="14" class="table-icon"><Grid /></el-icon>
           </span>
@@ -82,6 +88,28 @@
           <div v-if="currentColumnInfo.comment" class="info-item">
             <span class="info-label">注释:</span>
             <span class="info-value">{{ currentColumnInfo.comment }}</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 表信息跟随鼠标悬浮框 -->
+    <Teleport to="body">
+      <div 
+        v-if="showTableInfoPanel" 
+        class="table-info-panel"
+        :style="{ left: tableInfoPosition.x + 'px', top: tableInfoPosition.y + 'px' }"
+      >
+        <div class="table-info-header">
+          <span class="table-info-title">{{ currentTableInfoForHover.database }}.{{ currentTableInfoForHover.table }}</span>
+        </div>
+        <div class="table-info-body">
+          <div v-if="currentTableInfoForHover.comment" class="info-item">
+            <span class="info-label">表注释:</span>
+            <span class="info-value">{{ currentTableInfoForHover.comment }}</span>
+          </div>
+          <div v-else class="info-item">
+            <span class="info-value no-comment">暂无注释</span>
           </div>
         </div>
       </div>
@@ -153,6 +181,15 @@ const currentColumnInfo = ref({
   columnType: '',
   isPrimary: false,
   nullable: false,
+  comment: ''
+})
+
+// 表信息悬浮框相关
+const showTableInfoPanel = ref(false)
+const tableInfoPosition = ref({ x: 0, y: 0 })
+const currentTableInfoForHover = ref({
+  database: '',
+  table: '',
   comment: ''
 })
 
@@ -370,6 +407,31 @@ function updateColumnInfoPosition(event: MouseEvent) {
   }
 }
 
+// 表信息悬浮框相关函数
+function showTableInfo(event: MouseEvent, data: any) {
+  currentTableInfoForHover.value = {
+    database: data.database,
+    table: data.table,
+    comment: data.comment || ''
+  }
+  updateTableInfoPosition(event)
+  showTableInfoPanel.value = true
+}
+
+function hideTableInfo() {
+  showTableInfoPanel.value = false
+}
+
+function updateTableInfoPosition(event: MouseEvent) {
+  // 计算悬浮框位置，让它在鼠标右下方
+  const offsetX = 15
+  const offsetY = 15
+  tableInfoPosition.value = {
+    x: event.clientX + offsetX,
+    y: event.clientY + offsetY
+  }
+}
+
 function handleCheck() {
   const checkedNodes = treeRef.value?.getCheckedNodes() || []
   const tables = checkedNodes
@@ -424,6 +486,10 @@ defineExpose({
   }
 
   .column-node {
+    cursor: pointer;
+  }
+
+  .table-node {
     cursor: pointer;
   }
 }
@@ -486,6 +552,57 @@ defineExpose({
 
         &.primary {
           color: #4ec9b0;
+        }
+      }
+    }
+  }
+}
+
+.table-info-panel {
+  position: fixed;
+  z-index: 10000;
+  background: #1e1e1e;
+  color: #fff;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 180px;
+  max-width: 280px;
+  pointer-events: none;
+
+  .table-info-header {
+    padding: 10px 14px;
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
+    border-radius: 6px 6px 0 0;
+
+    .table-info-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #dcdcaa;
+    }
+  }
+
+  .table-info-body {
+    padding: 12px 14px;
+
+    .info-item {
+      display: flex;
+      font-size: 12px;
+      line-height: 1.5;
+
+      .info-label {
+        color: #9cdcfe;
+        min-width: 60px;
+        font-weight: 500;
+      }
+
+      .info-value {
+        color: #ce9178;
+        flex: 1;
+
+        &.no-comment {
+          color: #808080;
+          font-style: italic;
         }
       }
     }

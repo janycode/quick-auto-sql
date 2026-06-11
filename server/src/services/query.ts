@@ -35,7 +35,16 @@ export async function executeQuery(
 
     if (Array.isArray(result)) {
       const rows = result.slice(0, config.query.maxRows) as Record<string, unknown>[];
-      const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+      // 使用 fields 数组获取列名，确保顺序和完整性（比从第一行数据提取更可靠）
+      const columns: string[] = [];
+      if (fields && Array.isArray(fields) && fields.length > 0) {
+        for (const field of fields as any[]) {
+          columns.push(field.name);
+        }
+      } else if (rows.length > 0) {
+        // 如果没有 fields 信息，回退到从第一行数据提取
+        columns.push(...Object.keys(rows[0]));
+      }
       
       const columnComments: Record<string, string> = {};
       
@@ -44,15 +53,22 @@ export async function executeQuery(
         const removeNewlines = (str: string): string => str.replace(/[\r\n]+/g, ' ').trim();
         
         const tableSet = new Set<string>();
-        const fieldMap: Record<string, { table?: string; orgTable?: string }> = {};
+        // 记录每个字段的详细信息，包括原始列名
+        const fieldDetails: Array<{
+          columnName: string;
+          table?: string;
+          orgTable?: string;
+          orgName?: string;
+        }> = [];
         
         // 收集所有字段和对应的表信息
         for (const field of fields as any[]) {
-          const fieldName = field.name;
-          fieldMap[fieldName] = {
+          fieldDetails.push({
+            columnName: field.name,
             table: field.table,
-            orgTable: field.orgTable
-          };
+            orgTable: field.orgTable,
+            orgName: field.orgName
+          });
           if (field.table) {
             tableSet.add(field.table);
           }
@@ -82,16 +98,50 @@ export async function executeQuery(
           }
           
           // 为每个字段查找对应的注释
-          for (const [fieldName, info] of Object.entries(fieldMap)) {
+          for (const field of fieldDetails) {
             let comment = '';
-            if (info.table) {
-              comment = commentMap.get(`${info.table}.${fieldName}`) || '';
+            const columnName = field.columnName;
+            const orgColumnName = field.orgName || columnName;
+            const hasTableInfo = !!(field.table || field.orgTable);
+            
+            // 1. 先尝试用 table + columnName 查找（精确匹配）
+            if (field.table) {
+              comment = commentMap.get(`${field.table}.${columnName}`) || '';
             }
-            if (!comment && info.orgTable) {
-              comment = commentMap.get(`${info.orgTable}.${fieldName}`) || '';
+            // 2. 如果没找到，尝试用 table + orgColumnName 查找
+            if (!comment && field.table) {
+              comment = commentMap.get(`${field.table}.${orgColumnName}`) || '';
             }
+            // 3. 尝试用 orgTable + columnName 查找
+            if (!comment && field.orgTable) {
+              comment = commentMap.get(`${field.orgTable}.${columnName}`) || '';
+            }
+            // 4. 尝试用 orgTable + orgColumnName 查找
+            if (!comment && field.orgTable) {
+              comment = commentMap.get(`${field.orgTable}.${orgColumnName}`) || '';
+            }
+            
+            // 5. 如果有表信息但没找到，或者没有表信息，尝试在所有表中查找此列名
+            // （如果这个列名在所有查询的表中唯一存在的话）
+            if (!comment) {
+              const candidates: string[] = [];
+              for (const [key, value] of commentMap.entries()) {
+                if (value) {
+                  const parts = key.split('.');
+                  const col = parts[parts.length - 1];
+                  if (col === columnName || col === orgColumnName) {
+                    candidates.push(value);
+                  }
+                }
+              }
+              // 如果只有一个候选，使用它
+              if (candidates.length === 1) {
+                comment = candidates[0];
+              }
+            }
+            
             if (comment) {
-              columnComments[fieldName] = comment;
+              columnComments[columnName] = comment;
             }
           }
         }
@@ -131,6 +181,37 @@ export async function executeQuery(
     };
   } catch (error: any) {
     const message = error.sqlMessage || error.message || '查询执行失败';
+    throw new Error(message);
+  } finally {
+    conn.release();
+  }
+}
+
+// 对 SQL 执行 EXPLAIN，返回原始行数组（每行为列名 -> 值）
+export async function explainQuery(
+  connectionId: string,
+  database: string,
+  sql: string
+): Promise<Record<string, unknown>[]> {
+  const pool = getPoolById(connectionId);
+  if (!pool) throw new Error('连接不存在或未配置');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.changeUser({ database });
+
+    const [result] = await conn.query({
+      sql: `EXPLAIN ${sql}`,
+      rowsAsArray: false,
+      timeout: config.query.timeout,
+    });
+
+    if (Array.isArray(result)) {
+      return result as Record<string, unknown>[];
+    }
+    return [];
+  } catch (error: any) {
+    const message = error.sqlMessage || error.message || 'EXPLAIN 执行失败';
     throw new Error(message);
   } finally {
     conn.release();
