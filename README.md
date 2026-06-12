@@ -24,6 +24,13 @@
 - **SQL 安全限制**：执行接口禁止 DDL / 权限操作（DROP、TRUNCATE、ALTER、GRANT、REVOKE）
 - **可自定义提示词**：支持在线编辑 `generate_sql / analyze_sql / explain_sql` 三类提示词模板，并可一键重置为默认
 
+<img width="1921" height="1062" alt="image" src="https://github.com/user-attachments/assets/d4d2cda2-a29a-427e-a510-743b5d0efc6e" />
+<img width="906" height="853" alt="image" src="https://github.com/user-attachments/assets/191bb61d-8a80-4078-8f5b-715a3e61a200" />
+<img width="1232" height="519" alt="image" src="https://github.com/user-attachments/assets/c5f4c2fc-cb31-4ab5-b984-d7b8cb315164" />
+<img width="1921" height="1062" alt="image" src="https://github.com/user-attachments/assets/1f3069ae-98e7-4fdd-99f5-221f6b47e372" />
+更多细节功能，可进行探索。
+
+
 ## 🏗 技术栈
 
 | 层级 | 技术 |
