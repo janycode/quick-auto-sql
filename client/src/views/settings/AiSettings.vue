@@ -497,7 +497,7 @@ onMounted(async () => {
 .config-key {
   font-size: 12px;
   color: #909399;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: 'JetBrains Mono', Consolas, 'Monaco', monospace;
 }
 
 .config-actions {

@@ -324,6 +324,20 @@ function callAiNonStream(aiConfig: IAiConfig, userPrompt: string): Promise<strin
   });
 }
 
+// 去掉 SQL 顶部以 -- 开头的注释行（兼容行首空格、CRLF）
+function stripLeadingCommentLines(sql: string): string {
+  if (!sql) return sql;
+  const lines = sql.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    if (trimmed === '') { i++; continue; }
+    if (trimmed.startsWith('--')) { i++; continue; }
+    break;
+  }
+  return lines.slice(i).join('\n').trim();
+}
+
 export async function analyzeSql(
   connectionId: string,
   database: string,
@@ -334,7 +348,7 @@ export async function analyzeSql(
     throw new Error('请先在 AI 配置中添加并激活配置');
   }
 
-  const trimmedSql = sql.trim();
+  const trimmedSql = stripLeadingCommentLines(sql);
   if (!trimmedSql) throw new Error('SQL 不能为空');
 
   // 命中缓存（SQL 内容未变化时直接返回已有结果，跳过 EXPLAIN + AI 调用）

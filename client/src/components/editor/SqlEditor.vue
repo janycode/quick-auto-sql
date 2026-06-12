@@ -108,7 +108,6 @@
                     :prop="col"
                     :label="col"
                     :min-width="110"
-                    show-overflow-tooltip
                   >
                     <template #default="{ row }">
                       <el-tooltip
@@ -118,10 +117,7 @@
                         :disabled="!cellTooltip(col, row[col])"
                         popper-class="explain-tip"
                       >
-                        <span
-                          class="explain-cell-value"
-                          :title="cellTooltip(col, row[col])"
-                        >{{ row[col] === null || row[col] === undefined ? '' : row[col] }}</span>
+                        <span class="explain-cell-value">{{ row[col] === null || row[col] === undefined ? '' : row[col] }}</span>
                       </el-tooltip>
                     </template>
                   </el-table-column>
@@ -253,9 +249,15 @@
                 :min-width="110"
               >
                 <template #default="{ row }">
-                  <span :title="String(row[col] ?? '')">
-                    {{ row[col] === null || row[col] === undefined ? '' : row[col] }}
-                  </span>
+                  <el-tooltip
+                    :content="cellTooltip(col, row[col])"
+                    placement="top"
+                    effect="light"
+                    :disabled="!cellTooltip(col, row[col])"
+                    popper-class="explain-tip"
+                  >
+                    <span class="explain-cell-value">{{ row[col] === null || row[col] === undefined ? '' : row[col] }}</span>
+                  </el-tooltip>
                 </template>
               </el-table-column>
             </el-table>
@@ -766,6 +768,8 @@ onMounted(() => {
       theme: 'vs',
       minimap: { enabled: false },
       fontSize: 14,
+      fontFamily: "'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace",
+      fontLigatures: false,
       lineNumbers: 'on',
       automaticLayout: true,
       wordWrap: 'on',
@@ -863,9 +867,29 @@ function setSql(sql: string) {
   }
 }
 
+// 去掉 SQL 顶部以 -- 开头的注释行（兼容行首空格、回车换行）
+function stripLeadingCommentLines(sql: string): string {
+  if (!sql) return sql
+  const lines = sql.split(/\r?\n/)
+  let i = 0
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+    if (trimmed === '') {
+      i++
+      continue
+    }
+    if (trimmed.startsWith('--')) {
+      i++
+      continue
+    }
+    break
+  }
+  return lines.slice(i).join('\n').trim()
+}
+
 async function handleAnalyze() {
-  const sql = editor?.getValue()?.trim()
-  if (!sql) {
+  const rawSql = editor?.getValue()?.trim()
+  if (!rawSql) {
     ElMessage.warning('请先输入 SQL')
     return
   }
@@ -875,6 +899,12 @@ async function handleAnalyze() {
   }
   if (!currentDatabase.value) {
     ElMessage.warning('请先选择数据库')
+    return
+  }
+
+  const sql = stripLeadingCommentLines(rawSql)
+  if (!sql) {
+    ElMessage.warning('去掉注释后 SQL 为空，请重新输入')
     return
   }
 
@@ -942,7 +972,7 @@ defineExpose({ setSql })
 }
 
 .history-sql {
-  font-family: Consolas, 'Microsoft YaHei', monospace;
+  font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
   font-size: 12.5px;
   color: #303133;
   display: block;
@@ -956,7 +986,7 @@ defineExpose({ setSql })
   border: 1px solid #ebeef5;
   border-radius: 6px;
   padding: 10px 12px;
-  font-family: Consolas, 'Microsoft YaHei', monospace;
+  font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
   font-size: 12.5px;
   color: #303133;
   line-height: 1.7;
@@ -1023,7 +1053,7 @@ defineExpose({ setSql })
     font-weight: 500;
     color: #303133;
     min-height: 22px;
-    font-family: Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
   }
 
   .step-dots {
@@ -1054,14 +1084,14 @@ defineExpose({ setSql })
   .loading-progress-text {
     font-size: 12px;
     color: #909399;
-    font-family: Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
   }
 
   .loading-hint {
     margin-top: 4px;
     font-size: 12px;
     color: #c0c4cc;
-    font-family: Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
   }
 }
 
@@ -1102,7 +1132,7 @@ defineExpose({ setSql })
     background: #f7f8fa;
     border: 1px solid #ebeef5;
     border-radius: 6px;
-    font-family: Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
+    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
     font-size: 13px;
     line-height: 1.8;
     color: #303133;
@@ -1118,7 +1148,7 @@ defineExpose({ setSql })
       padding: 10px 12px;
       margin: 6px 0;
       color: #24292f;
-      font-family: Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
+      font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
       font-size: 12.5px;
       line-height: 1.7;
       overflow-x: auto;
@@ -1135,7 +1165,7 @@ defineExpose({ setSql })
       color: #0969da;
       padding: 1px 6px;
       border-radius: 4px;
-      font-family: Consolas, 'Microsoft YaHei', monospace;
+      font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
       margin: 0 2px;
     }
 
@@ -1210,7 +1240,7 @@ defineExpose({ setSql })
   .legend-item {
     padding: 2px 8px;
     border-radius: 999px;
-    font-family: Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
     font-size: 11px;
     line-height: 1.6;
 

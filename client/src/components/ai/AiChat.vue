@@ -15,12 +15,12 @@
         <div class="table-header">
           <div class="table-title">
             关联表:
-            <span v-if="selectedTables.length > 0" style="color: #909399; font-size: 12px">
+            <span v-if="workspaceStore.checkedTables.length > 0" style="color: #909399; font-size: 12px">
               (在左侧树中勾选表自动关联)
             </span>
           </div>
           <el-button
-            v-if="selectedTables.length > 0"
+            v-if="workspaceStore.checkedTables.length > 0"
             type="danger"
             link
             size="small"
@@ -30,22 +30,22 @@
           </el-button>
         </div>
         <TableSelector
-          :tables="selectedTables"
+          :tables="workspaceStore.checkedTables"
           @remove="removeTable"
         />
       </div>
 
       <!-- AI 输出区域 -->
-      <div v-if="generatedSql || generating" class="ai-output">
-        <div v-if="generating && !generatedSql" class="ai-loading">
+      <div v-if="workspaceStore.aiGeneratedSql || generating" class="ai-output">
+        <div v-if="generating && !workspaceStore.aiGeneratedSql" class="ai-loading">
           <el-icon class="is-loading"><Loading /></el-icon>
           <span class="loading-text">{{ loadingHint }}{{ loadingDots }}</span>
         </div>
         <div v-else class="ai-sql-output">
-          <pre><code v-html="highlightSql(generatedSql)"></code></pre>
+          <pre><code v-html="highlightSql(workspaceStore.aiGeneratedSql)"></code></pre>
         </div>
         <el-button
-          v-if="generatedSql && !generating"
+          v-if="workspaceStore.aiGeneratedSql && !generating"
           type="primary"
           size="small"
           style="margin-top: 8px; width: 100%"
@@ -163,28 +163,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import dayjs from 'dayjs'
+import hljs from 'highlight.js'
+import type { IAiHistory } from '@/api/ai'
 import TableSelector from './TableSelector.vue'
 import { useAiStore } from '@/stores/ai'
 import { useConnectionStore } from '@/stores/connection'
-import { useDatabaseStore } from '@/stores/database'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { fetchSSE } from '@/utils/sse'
 import { formatSql } from '@/utils/sql-formatter'
-import hljs from 'highlight.js'
+import dayjs from 'dayjs'
 import 'highlight.js/styles/github.css'
-import sql from 'highlight.js/lib/languages/sql'
-import type { IAiHistory } from '@/api/ai'
 
 hljs.registerLanguage('sql', sql)
 
-interface ISelectedTable {
-  database: string
-  table: string
-  comment: string
-}
+// 注：此处显式导入 sql 语言
+import sql from 'highlight.js/lib/languages/sql'
 
 const emit = defineEmits<{
   'use-sql': [sql: string]
@@ -193,18 +188,14 @@ const emit = defineEmits<{
 
 const aiStore = useAiStore()
 const connectionStore = useConnectionStore()
-const databaseStore = useDatabaseStore()
+const workspaceStore = useWorkspaceStore()
 
-// 组件挂载时加载 AI 配置
-onMounted(() => {
-  aiStore.fetchConfig()
+// question 绑定到 workspace store 的 aiQuestion
+const question = computed({
+  get: () => workspaceStore.aiQuestion,
+  set: (v: string) => workspaceStore.setAiQuestion(v),
 })
-
-const question = ref('')
-const selectedTables = ref<ISelectedTable[]>([])
 const generating = ref(false)
-const generatedSql = ref('')
-const rawSql = ref('') // 原始未格式化的 SQL
 let abortController: AbortController | null = null
 
 // 动态加载提示
@@ -221,13 +212,24 @@ const loadingDots = ref('')
 let loadingTimer: ReturnType<typeof setInterval> | null = null
 let hintTimer: ReturnType<typeof setInterval> | null = null
 
+onMounted(() => {
+  // 组件挂载时启动 loading 计时器（当 generating 变化时由 watch 控制）
+})
+
+onUnmounted(() => {
+  if (loadingTimer) clearInterval(loadingTimer)
+  if (hintTimer) clearInterval(hintTimer)
+})
+
+import { watch } from 'vue'
 watch(generating, (val) => {
   if (val) {
-    // 开始生成时，启动动态提示
     loadingHint.value = loadingHintTexts[0]
     loadingDots.value = '.'
     let dotCount = 1
     let hintIndex = 0
+    if (loadingTimer) clearInterval(loadingTimer)
+    if (hintTimer) clearInterval(hintTimer)
     loadingTimer = setInterval(() => {
       dotCount = (dotCount % 3) + 1
       loadingDots.value = '.'.repeat(dotCount)
@@ -237,32 +239,19 @@ watch(generating, (val) => {
       loadingHint.value = loadingHintTexts[hintIndex]
     }, 3000)
   } else {
-    // 停止生成后，清理定时器
-    if (loadingTimer) {
-      clearInterval(loadingTimer)
-      loadingTimer = null
-    }
-    if (hintTimer) {
-      clearInterval(hintTimer)
-      hintTimer = null
-    }
+    if (loadingTimer) clearInterval(loadingTimer)
+    if (hintTimer) clearInterval(hintTimer)
+    loadingDots.value = ''
   }
 })
 
-onUnmounted(() => {
-  if (loadingTimer) clearInterval(loadingTimer)
-  if (hintTimer) clearInterval(hintTimer)
-})
-
-// 历史相关
+// 历史对话
 const showHistoryModal = ref(false)
 const showSqlPreview = ref(false)
 const searchKeyword = ref('')
 const historyLoading = ref(false)
 const currentPreviewSql = ref('')
-const currentPreviewItem = ref<IAiHistory | null>(null)
 
-// 搜索过滤
 const filteredHistory = computed(() => {
   const kw = searchKeyword.value.trim().toLowerCase()
   if (!kw) return aiStore.history
@@ -274,17 +263,18 @@ const filteredHistory = computed(() => {
   )
 })
 
-// 由 Workspace 调用，自动同步左侧树勾选的表
-function setCheckedTables(tables: ISelectedTable[]) {
-  selectedTables.value = tables
+// 由 Workspace 调用：同步左侧树勾选的表
+function setCheckedTables(tables: { database: string; table: string; comment: string }[]) {
+  workspaceStore.setCheckedTables(tables, tables.map(t => `table_${t.database}_${t.table}`))
 }
 
 function removeTable(tableName: string) {
-  selectedTables.value = selectedTables.value.filter(t => t.table !== tableName)
+  const filtered = workspaceStore.checkedTables.filter(t => t.table !== tableName)
+  workspaceStore.setCheckedTables(filtered, filtered.map(t => `table_${t.database}_${t.table}`))
 }
 
 function handleClear() {
-  selectedTables.value = []
+  workspaceStore.clearCheckedTables()
   emit('clear-tables')
 }
 
@@ -312,7 +302,6 @@ function highlightSql(content: string): string {
 }
 
 function viewSql(item: IAiHistory) {
-  currentPreviewItem.value = item
   currentPreviewSql.value = item.sql
   showSqlPreview.value = true
 }
@@ -323,54 +312,50 @@ function useSqlFromHistory(item: IAiHistory) {
 }
 
 function usePreviewSql() {
-  if (currentPreviewItem.value) {
-    emit('use-sql', currentPreviewItem.value.sql)
-  }
+  emit('use-sql', currentPreviewSql.value)
   showSqlPreview.value = false
 }
 
 async function handleDeleteHistory(item: IAiHistory) {
   try {
-    await ElMessageBox.confirm(
-      `确定要删除该历史记录吗？`,
-      '提示',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
-    )
+    await useConfirm()
     await aiStore.removeHistory(item.id)
-    ElMessage.success('已删除')
   } catch {
-    // 用户取消
+    // 取消
   }
 }
 
 async function handleClearAllHistory() {
   try {
-    await ElMessageBox.confirm(
-      '确定要清空所有历史对话吗？此操作不可恢复。',
-      '警告',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
-    )
+    await useConfirm('确定要清空所有历史对话吗？此操作不可恢复。')
     await aiStore.clearHistory()
-    ElMessage.success('已清空全部历史')
   } catch {
-    // 用户取消
+    // 取消
   }
 }
 
 async function handleCopyQuestion(text: string) {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制到剪贴板')
   } catch {
-    // 降级方案
     const textarea = document.createElement('textarea')
     textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
     document.body.appendChild(textarea)
     textarea.select()
     document.execCommand('copy')
     document.body.removeChild(textarea)
-    ElMessage.success('已复制到剪贴板')
   }
+}
+
+import { ElMessageBox } from 'element-plus'
+function useConfirm(message = '确定要删除该历史记录吗？') {
+  return ElMessageBox.confirm(message, '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
 }
 
 async function handleGenerate() {
@@ -378,7 +363,7 @@ async function handleGenerate() {
     ElMessage.warning('请输入自然语言描述')
     return
   }
-  if (selectedTables.value.length === 0) {
+  if (workspaceStore.checkedTables.length === 0) {
     ElMessage.warning('请至少在左侧树中勾选一个表')
     return
   }
@@ -391,20 +376,19 @@ async function handleGenerate() {
     return
   }
 
-  // 使用第一个选中表所在的数据库
-  const database = selectedTables.value[0].database
+  const database = workspaceStore.checkedTables[0].database
   if (!database) {
     ElMessage.warning('请先选择数据库')
     return
   }
 
   generating.value = true
-  generatedSql.value = ''
-  rawSql.value = ''
+  workspaceStore.setAiGeneratedSql('')
+  const rawSql = ref('')
 
-  const tableNames = selectedTables.value.map(t => t.table)
+  const tableNames = workspaceStore.checkedTables.map(t => t.table)
   const connectionId = connectionStore.activeConnection.id
-  const currentQuestion = question.value
+  const currentQuestion = question.value.trim()
 
   abortController = fetchSSE('/api/ai/generate', {
     connectionId,
@@ -412,20 +396,18 @@ async function handleGenerate() {
     tables: tableNames,
     question: currentQuestion,
   }, {
-    onMessage: (data) => {
+    onMessage: (data: any) => {
       if (data.type === 'thinking') {
-        // 思考中
+        // 思考中，不显示
       } else if (data.type === 'sql') {
         rawSql.value += data.content
-        generatedSql.value += data.content
+        workspaceStore.setAiGeneratedSql(rawSql.value)
       } else if (data.type === 'error') {
         ElMessage.error(data.content)
       } else if (data.type === 'done') {
-        // 流式完成后格式化 SQL
         const finalSql = formatSql(rawSql.value)
-        generatedSql.value = finalSql
+        workspaceStore.setAiGeneratedSql(finalSql)
         generating.value = false
-        // 异步保存到后端（仅当生成的 SQL 非空时）
         if (finalSql && finalSql.trim()) {
           aiStore.addHistory({
             connectionId,
@@ -439,7 +421,7 @@ async function handleGenerate() {
         }
       }
     },
-    onError: (error) => {
+    onError: (error: any) => {
       ElMessage.error(error.message)
       generating.value = false
     },
@@ -450,9 +432,8 @@ async function handleGenerate() {
 }
 
 function handleUseSql() {
-  if (generatedSql.value) {
-    // 使用格式化后的 SQL
-    emit('use-sql', generatedSql.value)
+  if (workspaceStore.aiGeneratedSql) {
+    emit('use-sql', workspaceStore.aiGeneratedSql)
   }
 }
 
@@ -523,10 +504,6 @@ defineExpose({ setCheckedTables })
       color: #409eff;
       animation: rotate 1s linear infinite;
     }
-
-    .loading-text {
-      min-width: 180px;
-    }
   }
 
   .ai-sql-output {
@@ -535,11 +512,7 @@ defineExpose({ setCheckedTables })
     border-radius: 4px;
     overflow-x: auto;
 
-    :deep(pre) {
-      margin: 0;
-      background: transparent;
-    }
-
+    :deep(pre) { margin: 0; background: transparent; }
     :deep(code) {
       font-family: 'Consolas', 'Monaco', monospace;
       font-size: 13px;
@@ -548,16 +521,10 @@ defineExpose({ setCheckedTables })
       background: transparent;
       white-space: pre-wrap;
       word-break: break-all;
-      display: block;
     }
-
     :deep(.hljs-keyword) { color: #c7254e; }
     :deep(.hljs-string) { color: #22863a; }
     :deep(.hljs-number) { color: #005cc5; }
-    :deep(.hljs-comment) { color: #998; font-style: italic; }
-    :deep(.hljs-built_in), :deep(.hljs-type) { color: #6f42c1; }
-    :deep(.hljs-function) { color: #6f42c1; }
-    :deep(.hljs-title) { color: #6f42c1; }
   }
 }
 
@@ -571,8 +538,6 @@ defineExpose({ setCheckedTables })
 .history-list {
   max-height: 480px;
   overflow-y: auto;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
 }
 
 .history-item {
@@ -582,100 +547,38 @@ defineExpose({ setCheckedTables })
   gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid #ebeef5;
-  transition: background-color 0.2s;
 
-  &:last-child {
-    border-bottom: none;
-  }
-
-  &:hover {
-    background-color: #f5f7fa;
-  }
+  &:last-child { border-bottom: none; }
+  &:hover { background-color: #f5f7fa; }
 }
 
-.history-content {
-  flex: 1;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.history-question-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.copy-question-icon {
-  font-size: 14px;
-  color: #909399;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.2s;
-
-  &:hover {
-    color: #409eff;
-  }
-}
-
+.history-content { flex: 1; overflow: hidden; min-width: 0; }
+.history-question-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.copy-question-icon { font-size: 14px; color: #909399; cursor: pointer; &:hover { color: #409eff; } }
 .history-question {
-  font-size: 13px;
-  color: #303133;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: default;
-  flex: 1;
-  min-width: 0;
+  font-size: 13px; color: #303133; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex: 1; min-width: 0;
 }
+.history-meta { font-size: 12px; color: #909399; display: flex; align-items: center; gap: 6px; }
+.meta-divider { color: #c0c4cc; }
 
-.history-meta {
-  font-size: 12px;
-  color: #909399;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-
-  .meta-divider {
-    color: #c0c4cc;
-  }
-}
-
-.history-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.history-empty {
-  padding: 24px 0;
-}
+.history-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.history-empty { padding: 24px 0; }
 
 .sql-preview-code {
-  margin: 0;
-  padding: 0;
-  border: 1px solid #e8e8e8;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #fff;
+  margin: 0; padding: 0; border: 1px solid #e8e8e8; border-radius: 4px;
+  overflow: hidden; background: #fff;
 
   :deep(code) {
-    display: block;
-    padding: 16px;
-    font-family: Consolas, 'Microsoft YaHei UI', 'Courier New', Courier, monospace !important;
-    font-size: 13px;
-    line-height: 1.6;
-    white-space: pre-wrap !important;
-    word-wrap: break-word !important;
-    overflow-wrap: break-word !important;
-    max-height: 400px;
-    overflow-y: auto;
+    display: block; padding: 16px;
+    font-family: Consolas, 'Microsoft YaHei UI', 'Courier New', monospace !important;
+    font-size: 13px; line-height: 1.6; white-space: pre-wrap !important;
+    word-wrap: break-word !important; overflow-wrap: break-word !important;
+    max-height: 400px; overflow-y: auto;
   }
 }
 
 @keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from { transform: rotate(0deg); } to { transform: rotate(360deg); }
 }
 </style>
