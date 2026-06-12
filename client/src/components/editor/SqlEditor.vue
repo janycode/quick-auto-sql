@@ -109,6 +109,16 @@
                     :label="col"
                     :min-width="110"
                   >
+                    <template #header="{ column }">
+                      <el-tooltip
+                        :content="headerTooltip(col as string)"
+                        placement="top"
+                        effect="light"
+                        :disabled="!headerTooltip(col as string)"
+                      >
+                        <span class="explain-header">{{ column.label }}</span>
+                      </el-tooltip>
+                    </template>
                     <template #default="{ row }">
                       <el-tooltip
                         :content="cellTooltip(col, row[col])"
@@ -248,6 +258,16 @@
                 :label="col"
                 :min-width="110"
               >
+                <template #header="{ column }">
+                  <el-tooltip
+                    :content="headerTooltip(col as string)"
+                    placement="top"
+                    effect="light"
+                    :disabled="!headerTooltip(col as string)"
+                  >
+                    <span class="explain-header">{{ column.label }}</span>
+                  </el-tooltip>
+                </template>
                 <template #default="{ row }">
                   <el-tooltip
                     :content="cellTooltip(col, row[col])"
@@ -944,89 +964,136 @@ function formatDateTime(s?: string): string {
   }
 }
 
-// EXPLAIN 关键字段的中文含义映射（鼠标悬停提示）
+// ======== AI SQL 分析：EXPLAIN 悬浮提示（简洁版）========
+// 表头：只展示字段含义；单元格：只展示当前值的简短释义
+// type 列：访问方式（性能从优到劣：system → const → eq_ref → ref → range → index → ALL）
 const TYPE_TIPS: Record<string, string> = {
-  system: '系统表，仅一行，极快，通常可忽略',
-  const: '主键/唯一索引命中一行，可当作常量',
-  eq_ref: '唯一索引关联，每个驱动行对应一行',
-  ref: '非唯一索引扫描，返回匹配的多行',
+  system: '系统表，仅一行，最快，通常可忽略',
+  const: '主键/唯一索引命中单行，等同于常量，极快',
+  eq_ref: '唯一索引关联，外层每一行对应一行，性能优秀',
+  ref: '非唯一索引扫描，返回匹配的多行，良好',
   fulltext: '全文索引扫描',
-  'ref_or_null': '类似 ref，额外处理 NULL 值',
-  'index_merge': '索引合并优化（多索引组合使用）',
-  'unique_subquery': 'IN 子查询替换为唯一索引查找',
-  'index_subquery': 'IN 子查询替换为普通索引查找',
-  range: '索引范围扫描（between/<、>/in）',
-  index: '遍历整棵索引树，比全表扫略好',
-  all: '全表扫描，性能最差，建议添加索引',
-}
+  ref_or_null: '类似 ref，额外查询 NULL 值的行',
+  index_merge: '索引合并优化（同时使用多个索引）',
+  unique_subquery: 'IN 子查询替换为唯一索引查找',
+  index_subquery: 'IN 子查询替换为普通索引查找',
+  range: '索引范围扫描（BETWEEN / > / < / IN）',
+  index: '全索引扫描，比全表扫描快但仍有开销',
+  all: '全表扫描，性能最差，强烈建议加索引',
+};
 
+// Extra 列常见取值的简短释义
 const EXTRA_TIPS: Record<string, string> = {
-  'Using where': 'WHERE 条件在读取行后再过滤（未走索引时常见）',
-  'Using index': '仅从索引读取数据（覆盖索引），无需回表，性能好',
-  'Using filesort': '无法利用索引排序，需要额外排序操作，性能差',
-  'Using temporary': '需要创建临时表存中间结果，性能差，常见于 GROUP BY/ORDER BY',
-  'Impossible WHERE': 'WHERE 条件恒假，不会返回任何行',
-  'Using join buffer': '关联时使用了连接缓存，通常代表未走索引关联',
-  'Using index condition': '索引条件下推（ICP），在索引层先过滤，减少回表',
-  'Using MRR': '多范围读取优化，减少随机 IO',
-  'No tables used': '无表访问（例如 SELECT 常量）',
-  'Select tables optimized away': '已通过索引/聚合优化掉表扫描',
-  'Backward index scan': '倒序扫描索引（InnoDB DESC 扫描）',
-}
+  'Using where': 'WHERE 在读取行后过滤',
+  'Using index': '覆盖索引，无需回表，性能好',
+  'Using filesort': '需额外排序（不一定是文件排序）',
+  'Using temporary': '使用临时表，常见 GROUP BY，性能差',
+  'Impossible WHERE': 'WHERE 恒假，无结果返回',
+  'Using join buffer': '使用连接缓存，建议加索引',
+  'Using index condition': '索引条件下推（ICP）',
+  'Using MRR': '多范围读取优化',
+  'Backward index scan': '倒序扫描索引',
+  'No tables used': '未访问任何表',
+  'Select tables optimized away': '已通过索引/聚合跳过扫描',
+  Distinct: '去重查询',
+  'Full scan on NULL key': '子查询 NULL 键全扫描',
+  'Range checked for each record': '每条外层记录都尝试范围查找',
+  'Using sort_union': '索引合并 OR 组合',
+  'Using union': '索引合并 UNION',
+  'Using intersect': '索引合并 AND 组合',
+};
 
+// select_type 列
 const SELECT_TYPE_TIPS: Record<string, string> = {
-  SIMPLE: '简单查询，无 UNION/子查询',
+  SIMPLE: '简单 SELECT，无 UNION/子查询',
   PRIMARY: '最外层查询',
-  UNION: 'UNION 中的第二个及后续查询',
-  'UNION RESULT': 'UNION 的合并结果集',
-  SUBQUERY: '不依赖外层的子查询（可被优化器提前执行）',
-  DEPENDENT: '依赖外层查询的子查询（每行重算，性能差）',
-  DEPENDENT_SUBQUERY: '依赖外层查询的子查询（每行重算，性能差）',
-  'DEPENDENT UNION': 'UNION 中的子查询依赖外层查询',
+  UNION: 'UNION 中第二个及以后的 SELECT',
+  'UNION RESULT': 'UNION 合并的结果集',
+  SUBQUERY: '独立的子查询',
+  DEPENDENT: '依赖外层查询的子查询',
+  DEPENDENT_SUBQUERY: '依赖外层查询的子查询',
+  'DEPENDENT UNION': 'UNION 中子查询依赖外层',
   DERIVED: '派生表/临时结果集',
   MATERIALIZED: '物化子查询',
-  UNCACHEABLE: '无法缓存的子查询',
-  'UNCACHEABLE SUBQUERY': '结果不可缓存，每次执行需重算',
-  'UNCACHEABLE UNION': 'UNION 中不可缓存的子查询',
+  UNCACHEABLE: '不可缓存子查询',
+  'UNCACHEABLE SUBQUERY': '结果不可缓存',
+  'UNCACHEABLE UNION': 'UNION 中不可缓存子查询',
+};
+
+// 表头提示：字段级整体含义
+const HEADER_TIPS: Record<string, string> = {
+  id: '查询执行顺序标识，越大越先执行；相同从上到下',
+  select_type: '查询类型（SIMPLE/PRIMARY/UNION/SUBQUERY/DERIVED/MATERIALIZED 等）',
+  table: '当前访问的表/别名/派生表',
+  partitions: '匹配的分区；未分区表为 NULL',
+  type: '访问方式（system/const/eq_ref/ref/range/index/ALL，性能从好到差）',
+  possible_keys: '可能用到的索引；为 NULL 代表无合适索引',
+  key: '实际使用的索引；为 NULL 代表未走索引',
+  key_len: '使用索引的字节数，越小越好；可反推用到联合索引前几列',
+  ref: '与索引做等值比较的列或常量',
+  rows: '估算需扫描的行数，越小越好',
+  filtered: 'WHERE 过滤后剩余行的百分比（相对于 rows），越高越好',
+  Extra: '执行时的附加信息（Using index/filesort/temporary 等）',
+};
+
+function headerTooltip(col: string): string {
+  return HEADER_TIPS[col] || '';
 }
 
 function cellTooltip(col: string, value: unknown): string {
-  if (value === null || value === undefined || value === '') return ''
-  const str = String(value).trim()
+  const str = value === null || value === undefined ? '' : String(value).trim();
+  if (!str) return '';
+
   if (col === 'type') {
-    const lower = str.toLowerCase()
-    if (TYPE_TIPS[lower]) return `${str} — ${TYPE_TIPS[lower]}`
-    return str
+    const lower = str.toLowerCase();
+    if (TYPE_TIPS[lower]) return TYPE_TIPS[lower];
+    return '';
   }
+
   if (col === 'Extra') {
-    const upper = str.toUpperCase()
-    const hit = Object.keys(EXTRA_TIPS).find(k => upper.includes(k.toUpperCase()))
-    if (hit) return `${str}（${EXTRA_TIPS[hit]}）`
-    return str
+    const upper = str.toUpperCase();
+    const matches = [];
+    Object.keys(EXTRA_TIPS).forEach(function (k) {
+      if (upper.indexOf(k.toUpperCase()) >= 0) matches.push(EXTRA_TIPS[k]);
+    });
+    return matches.join('；');
   }
+
   if (col === 'select_type') {
-    const key = Object.keys(SELECT_TYPE_TIPS).find(k => str.toUpperCase().includes(k))
-    if (key) return `${str}（${SELECT_TYPE_TIPS[key]}）`
-    return str
+    const key = Object.keys(SELECT_TYPE_TIPS).find(function (k) {
+      return str.toUpperCase().indexOf(k) >= 0;
+    });
+    if (key) return SELECT_TYPE_TIPS[key];
+    return '';
   }
+
   if (col === 'rows') {
-    const n = Number(str)
-    if (!Number.isFinite(n)) return str
-    if (n > 10000) return `${str} 行（扫描行数较多，可能需优化）`
-    if (n > 1000) return `${str} 行（扫描行数中等）`
-    return `${str} 行`
+    const n = Number(str);
+    if (!Number.isFinite(n)) return '';
+    if (n >= 100000) return '扫描超过 10 万行，建议缩小范围或加索引';
+    if (n >= 10000) return '扫描超过 1 万行，建议加索引';
+    if (n >= 1000) return '千级扫描，可接受';
+    return '扫描行数较少';
   }
+
   if (col === 'filtered') {
-    const n = Number(str.replace('%', ''))
-    if (!Number.isFinite(n)) return str
-    if (n < 30) return `${str}（仅少量行被保留，过滤效率低，可能缺少索引）`
-    if (n < 80) return `${str}（中等过滤效率）`
-    return `${str}（过滤效率良好）`
+    const n = Number(str.replace('%', ''));
+    if (!Number.isFinite(n)) return '';
+    if (n < 10) return '过滤效率很差，WHERE 条件可能缺少索引';
+    if (n < 30) return '过滤效率偏低，建议优化条件或索引';
+    if (n < 70) return '过滤效率中等';
+    return '过滤效率良好';
   }
-  if (col === 'key' || col === 'possible_keys') {
-    return `${col}：${str}`
-  }
-  return str
+
+  if (col === 'key') return '实际使用索引：' + str;
+  if (col === 'possible_keys') return '候选索引：' + str;
+  if (col === 'key_len') return '索引长度：' + str + ' 字节';
+  if (col === 'ref') return '等值比较：' + str;
+  if (col === 'table') return '访问表：' + str;
+  if (col === 'id') return '查询顺序：' + str;
+  if (col === 'partitions') return '匹配分区：' + str;
+
+  return '';
 }
 
 // 动态 loading 状态
@@ -1811,6 +1878,11 @@ defineExpose({ setSql })
   display: inline-block;
   min-height: 18px;
   cursor: help;
+}
+
+.explain-header {
+  cursor: help;
+  font-weight: 600;
 }
 
 .analyze-empty {

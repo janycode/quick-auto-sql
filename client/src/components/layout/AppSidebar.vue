@@ -14,7 +14,8 @@
           :value="conn.id"
         />
       </el-select>
-      <el-button :icon="Plus" circle size="small" @click="$emit('add-connection')" />
+      <el-button :icon="Refresh" circle size="small" @click="handleRefresh" title="刷新" />
+      <el-button :icon="Plus" circle size="small" @click="$emit('add-connection')" title="添加连接" />
     </div>
     <div class="sidebar-content">
       <DbTree
@@ -31,7 +32,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useConnectionStore } from '@/stores/connection'
 import DbTree from '@/components/database/DbTree.vue'
 
@@ -56,6 +57,12 @@ watch(() => connectionStore.activeConnection, (conn) => {
 function handleConnectionChange(id: string) {
   const conn = connections.value.find(c => c.id === id)
   if (conn) connectionStore.setActiveConnection(conn)
+}
+
+function handleRefresh() {
+  if (dbTreeRef.value?.refresh) {
+    dbTreeRef.value.refresh()
+  }
 }
 
 function handleSelectTable(database: string, table: string) {

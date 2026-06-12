@@ -121,6 +121,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     checkedTableKeys.value = []
   }
 
+  // 清空展开节点 keys
+  function clearExpandedKeys() {
+    expandedKeys.value = []
+  }
+
   // 设置当前数据库
   function setCurrentDatabase(db: string) {
     currentDatabase.value = db
@@ -154,5 +159,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     setExpandedKeys,
     addExpandedKey,
     removeExpandedKey,
+    clearExpandedKeys,
   }
 })

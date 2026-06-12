@@ -37,6 +37,7 @@
         <div 
           v-else-if="data.type === 'table'" 
           class="node-content table-node"
+          @contextmenu.prevent.stop="showContextMenu($event, 'table', data)"
         >
           <span class="table-icon-wrapper" @click.stop="showTableStructure(data.database, data.table, data.comment)">
             <el-icon :size="14" class="table-icon"><Grid /></el-icon>
@@ -59,6 +60,7 @@
           @mouseenter="showColumnInfo($event, data)"
           @mouseleave="hideColumnInfo"
           @mousemove="updateColumnInfoPosition($event)"
+          @contextmenu.prevent.stop="showContextMenu($event, 'column', data)"
         >
           <el-icon :size="14"><Key v-if="data.isPrimary" /><Document v-else /></el-icon>
           <span style="margin-left: 4px">{{ node.label }}</span>
@@ -195,12 +197,259 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 右键菜单 -->
+    <Teleport to="body">
+      <div 
+        v-if="contextMenu.visible" 
+        class="context-menu"
+        :style="{ left: contextMenu.position.x + 'px', top: contextMenu.position.y + 'px' }"
+        @click.stop
+      >
+        <!-- 表节点右键菜单 -->
+        <template v-if="contextMenu.type === 'table'">
+          <div class="context-menu-item" @click="openTableDialog('rename')">
+            <el-icon><Edit /></el-icon>
+            <span>修改表名</span>
+          </div>
+          <div class="context-menu-item" @click="openTableDialog('comment')">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>修改表注释</span>
+          </div>
+          <div class="context-menu-item" @click="openTableDialog('engine')">
+            <el-icon><Setting /></el-icon>
+            <span>修改存储引擎</span>
+          </div>
+          <div class="context-menu-item" @click="openTableDialog('charset')">
+            <el-icon><Brush /></el-icon>
+            <span>修改字符集</span>
+          </div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item" @click="openTableDialog('addColumn')">
+            <el-icon><Plus /></el-icon>
+            <span>新增字段</span>
+          </div>
+          <div class="context-menu-item" @click="copyTableName(contextMenu.data.table, contextMenu.data.key)">
+            <el-icon><CopyDocument /></el-icon>
+            <span>复制表名</span>
+          </div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item danger" @click="confirmDropTable">
+            <el-icon><Delete /></el-icon>
+            <span>删除表</span>
+          </div>
+          <div class="context-menu-item danger" @click="confirmTruncateTable">
+            <el-icon><DeleteLocation /></el-icon>
+            <span>清空表数据</span>
+          </div>
+        </template>
+
+        <!-- 字段节点右键菜单 -->
+        <template v-if="contextMenu.type === 'column'">
+          <div class="context-menu-item" @click="openColumnDialog('rename')">
+            <el-icon><Edit /></el-icon>
+            <span>修改字段名</span>
+          </div>
+          <div class="context-menu-item" @click="openColumnDialog('type')">
+            <el-icon><Document /></el-icon>
+            <span>修改字段类型</span>
+          </div>
+          <div class="context-menu-item" @click="openColumnDialog('nullable')">
+            <el-icon><CircleCheck v-if="!contextMenu.data.nullable" /><CircleClose v-else /></el-icon>
+            <span>{{ contextMenu.data.nullable ? '设为 NOT NULL' : '允许为 NULL' }}</span>
+          </div>
+          <div class="context-menu-item" @click="openColumnDialog('default')">
+            <el-icon><Operation /></el-icon>
+            <span>修改默认值</span>
+          </div>
+          <div class="context-menu-item" @click="openColumnDialog('comment')">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>修改字段注释</span>
+          </div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item" @click="togglePrimaryKey">
+            <el-icon><Key /></el-icon>
+            <span>{{ contextMenu.data.isPrimary ? '取消主键' : '设为主键' }}</span>
+          </div>
+          <div class="context-menu-item" @click="openColumnDialog('addAfter')">
+            <el-icon><Plus /></el-icon>
+            <span>在后面插入字段</span>
+          </div>
+          <div class="context-menu-item" @click="copyColumnName(contextMenu.data.columnName)">
+            <el-icon><CopyDocument /></el-icon>
+            <span>复制字段名</span>
+          </div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item danger" @click="confirmDropColumn">
+            <el-icon><Delete /></el-icon>
+            <span>删除字段</span>
+          </div>
+        </template>
+      </div>
+    </Teleport>
+
+    <!-- 修改表属性对话框 -->
+    <el-dialog 
+      v-model="tableDialog.visible" 
+      :title="tableDialog.title" 
+      width="500px"
+      @closed="handleTableDialogClosed"
+    >
+      <el-form :model="tableDialog.form" label-width="100px">
+        <el-form-item v-if="tableDialog.action === 'rename'" label="新表名">
+          <el-input v-model="tableDialog.form.newTableName" placeholder="请输入新的表名" />
+        </el-form-item>
+        <el-form-item v-if="tableDialog.action === 'comment'" label="表注释">
+          <el-input v-model="tableDialog.form.comment" placeholder="请输入表注释" />
+        </el-form-item>
+        <el-form-item v-if="tableDialog.action === 'engine'" label="存储引擎">
+          <el-select v-model="tableDialog.form.engine" placeholder="请选择存储引擎">
+            <el-option label="InnoDB" value="InnoDB" />
+            <el-option label="MyISAM" value="MyISAM" />
+            <el-option label="MEMORY" value="MEMORY" />
+            <el-option label="ARCHIVE" value="ARCHIVE" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="tableDialog.action === 'charset'" label="字符集">
+          <el-select v-model="tableDialog.form.charset" placeholder="请选择字符集" style="width: 100%">
+            <el-option label="utf8mb4" value="utf8mb4" />
+            <el-option label="utf8" value="utf8" />
+            <el-option label="gbk" value="gbk" />
+            <el-option label="latin1" value="latin1" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="tableDialog.action === 'charset'" label="排序规则">
+          <el-select v-model="tableDialog.form.collation" placeholder="请选择排序规则" style="width: 100%">
+            <el-option label="utf8mb4_general_ci" value="utf8mb4_general_ci" />
+            <el-option label="utf8mb4_unicode_ci" value="utf8mb4_unicode_ci" />
+            <el-option label="utf8_general_ci" value="utf8_general_ci" />
+            <el-option label="gbk_chinese_ci" value="gbk_chinese_ci" />
+            <el-option label="latin1_swedish_ci" value="latin1_swedish_ci" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="tableDialog.action === 'addColumn'">
+          <div class="add-column-form">
+            <el-form-item label="字段名">
+              <el-input v-model="tableDialog.form.newColumn.name" placeholder="请输入字段名" />
+            </el-form-item>
+            <el-form-item label="字段类型">
+              <el-select v-model="tableDialog.form.newColumn.type" placeholder="请选择字段类型" style="width: 100%">
+                <el-option label="INT" value="INT" />
+                <el-option label="BIGINT" value="BIGINT" />
+                <el-option label="VARCHAR(255)" value="VARCHAR(255)" />
+                <el-option label="VARCHAR(500)" value="VARCHAR(500)" />
+                <el-option label="TEXT" value="TEXT" />
+                <el-option label="DATETIME" value="DATETIME" />
+                <el-option label="DATE" value="DATE" />
+                <el-option label="DECIMAL(10,2)" value="DECIMAL(10,2)" />
+                <el-option label="TINYINT(1)" value="TINYINT(1)" />
+                <el-option label="JSON" value="JSON" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="允许为NULL">
+              <el-switch v-model="tableDialog.form.newColumn.nullable" />
+            </el-form-item>
+            <el-form-item label="默认值">
+              <el-input v-model="tableDialog.form.newColumn.defaultValue" placeholder="请输入默认值（可选）" />
+            </el-form-item>
+            <el-form-item label="注释">
+              <el-input v-model="tableDialog.form.newColumn.comment" placeholder="请输入字段注释（可选）" />
+            </el-form-item>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="tableDialog.visible = false">取消</el-button>
+        <el-button type="primary" @click="executeTableAction">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 修改字段属性对话框 -->
+    <el-dialog 
+      v-model="columnDialog.visible" 
+      :title="columnDialog.title" 
+      width="500px"
+      @closed="handleColumnDialogClosed"
+    >
+      <el-form :model="columnDialog.form" label-width="100px">
+        <el-form-item v-if="columnDialog.action === 'rename'" label="新字段名">
+          <el-input v-model="columnDialog.form.newColumnName" placeholder="请输入新的字段名" />
+        </el-form-item>
+        <el-form-item v-if="columnDialog.action === 'type'" label="字段类型">
+          <el-select v-model="columnDialog.form.newType" placeholder="请选择字段类型" style="width: 100%">
+            <el-option label="INT" value="INT" />
+            <el-option label="BIGINT" value="BIGINT" />
+            <el-option label="VARCHAR(50)" value="VARCHAR(50)" />
+            <el-option label="VARCHAR(100)" value="VARCHAR(100)" />
+            <el-option label="VARCHAR(255)" value="VARCHAR(255)" />
+            <el-option label="VARCHAR(500)" value="VARCHAR(500)" />
+            <el-option label="TEXT" value="TEXT" />
+            <el-option label="MEDIUMTEXT" value="MEDIUMTEXT" />
+            <el-option label="LONGTEXT" value="LONGTEXT" />
+            <el-option label="DATETIME" value="DATETIME" />
+            <el-option label="DATE" value="DATE" />
+            <el-option label="TIME" value="TIME" />
+            <el-option label="DECIMAL(10,2)" value="DECIMAL(10,2)" />
+            <el-option label="DECIMAL(18,4)" value="DECIMAL(18,4)" />
+            <el-option label="TINYINT(1)" value="TINYINT(1)" />
+            <el-option label="FLOAT" value="FLOAT" />
+            <el-option label="DOUBLE" value="DOUBLE" />
+            <el-option label="JSON" value="JSON" />
+            <el-option label="BLOB" value="BLOB" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="columnDialog.action === 'default'" label="默认值">
+          <el-input v-model="columnDialog.form.defaultValue" placeholder="请输入默认值（留空表示无默认值）" />
+        </el-form-item>
+        <el-form-item v-if="columnDialog.action === 'comment'" label="字段注释">
+          <el-input v-model="columnDialog.form.comment" placeholder="请输入字段注释" />
+        </el-form-item>
+        <el-form-item v-if="columnDialog.action === 'addAfter'">
+          <div class="add-column-form">
+            <el-form-item label="字段名">
+              <el-input v-model="columnDialog.form.newColumn.name" placeholder="请输入字段名" />
+            </el-form-item>
+            <el-form-item label="字段类型">
+              <el-select v-model="columnDialog.form.newColumn.type" placeholder="请选择字段类型" style="width: 100%">
+                <el-option label="INT" value="INT" />
+                <el-option label="BIGINT" value="BIGINT" />
+                <el-option label="VARCHAR(255)" value="VARCHAR(255)" />
+                <el-option label="VARCHAR(500)" value="VARCHAR(500)" />
+                <el-option label="TEXT" value="TEXT" />
+                <el-option label="DATETIME" value="DATETIME" />
+                <el-option label="DATE" value="DATE" />
+                <el-option label="DECIMAL(10,2)" value="DECIMAL(10,2)" />
+                <el-option label="TINYINT(1)" value="TINYINT(1)" />
+                <el-option label="JSON" value="JSON" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="允许为NULL">
+              <el-switch v-model="columnDialog.form.newColumn.nullable" />
+            </el-form-item>
+            <el-form-item label="默认值">
+              <el-input v-model="columnDialog.form.newColumn.defaultValue" placeholder="请输入默认值（可选）" />
+            </el-form-item>
+            <el-form-item label="注释">
+              <el-input v-model="columnDialog.form.newColumn.comment" placeholder="请输入字段注释（可选）" />
+            </el-form-item>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="columnDialog.visible = false">取消</el-button>
+        <el-button type="primary" @click="executeColumnAction">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch, computed } from 'vue'
-import { Coin, Grid, Key, Document, Search, CopyDocument, Check, ArrowDown, DataLine, Loading, Warning, DocumentDelete } from '@element-plus/icons-vue'
+import { ref, onMounted, nextTick, watch, computed, onUnmounted } from 'vue'
+import { 
+  Coin, Grid, Key, Document, Search, CopyDocument, Check, ArrowDown, DataLine, 
+  Loading, Warning, DocumentDelete, Edit, ChatDotRound, Setting, Brush, Plus, 
+  Delete, DeleteLocation, Operation, CircleCheck, CircleClose 
+} from '@element-plus/icons-vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useWorkspaceStore } from '@/stores/workspace'
 import * as databaseApi from '@/api/database'
@@ -227,6 +476,57 @@ const treeData = ref<any[]>([])
 const searchText = ref<Record<string, string>>({})
 const originalTablesMap = ref<Record<string, any[]>>({})
 const copiedTableKey = ref<string>('')
+const copiedColumnName = ref<string>('')
+
+// 右键菜单相关
+const contextMenu = ref({
+  visible: false,
+  type: '' as 'table' | 'column' | '',
+  position: { x: 0, y: 0 },
+  data: {} as any
+})
+
+// 表属性对话框相关
+const tableDialog = ref({
+  visible: false,
+  title: '',
+  action: '' as 'rename' | 'comment' | 'engine' | 'charset' | 'addColumn' | '',
+  form: {
+    newTableName: '',
+    comment: '',
+    engine: '',
+    charset: '',
+    collation: '',
+    newColumn: {
+      name: '',
+      type: '',
+      nullable: true,
+      defaultValue: '',
+      comment: ''
+    }
+  }
+})
+
+// 字段属性对话框相关
+const columnDialog = ref({
+  visible: false,
+  title: '',
+  action: '' as 'rename' | 'type' | 'nullable' | 'default' | 'comment' | 'addAfter' | '',
+  form: {
+    newColumnName: '',
+    newType: '',
+    nullable: false,
+    defaultValue: '',
+    comment: '',
+    newColumn: {
+      name: '',
+      type: '',
+      nullable: true,
+      defaultValue: '',
+      comment: ''
+    }
+  }
+})
 
 // 表结构弹窗相关
 const showTableModal = ref(false)
@@ -284,6 +584,12 @@ onMounted(async () => {
   setTimeout(() => {
     restoreCheckedKeys()
   }, 200)
+  // 点击页面任意位置时隐藏右键菜单
+  document.addEventListener('click', hideContextMenu)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', hideContextMenu)
 })
 
 // 恢复保存的勾选状态
@@ -426,6 +732,377 @@ function hideNonTableCheckboxes() {
     }
     // 注意：数据库节点的展开箭头和表节点的展开箭头都保持默认行为
   })
+}
+
+// ==================== 右键菜单相关方法 ====================
+
+function showContextMenu(event: MouseEvent, type: 'table' | 'column', data: any) {
+  // 隐藏悬浮框
+  hideColumnInfo()
+  hideTableInfo()
+  
+  // 设置右键菜单位置和数据
+  contextMenu.value.position = {
+    x: event.clientX,
+    y: event.clientY
+  }
+  contextMenu.value.type = type
+  contextMenu.value.data = { ...data }
+  contextMenu.value.visible = true
+}
+
+// 点击页面其他位置时隐藏右键菜单
+function hideContextMenu() {
+  contextMenu.value.visible = false
+}
+
+// ==================== 表节点右键菜单操作 ====================
+
+function openTableDialog(action: 'rename' | 'comment' | 'engine' | 'charset' | 'addColumn') {
+  hideContextMenu()
+  
+  tableDialog.value.action = action
+  tableDialog.value.visible = true
+  
+  // 根据不同操作设置标题和初始值
+  switch (action) {
+    case 'rename':
+      tableDialog.value.title = '修改表名'
+      tableDialog.value.form.newTableName = contextMenu.value.data.table || ''
+      break
+    case 'comment':
+      tableDialog.value.title = '修改表注释'
+      tableDialog.value.form.comment = contextMenu.value.data.comment || ''
+      break
+    case 'engine':
+      tableDialog.value.title = '修改存储引擎'
+      tableDialog.value.form.engine = contextMenu.value.data.engine || 'InnoDB'
+      break
+    case 'charset':
+      tableDialog.value.title = '修改字符集和排序规则'
+      tableDialog.value.form.charset = contextMenu.value.data.charset || 'utf8mb4'
+      tableDialog.value.form.collation = contextMenu.value.data.collation || 'utf8mb4_general_ci'
+      break
+    case 'addColumn':
+      tableDialog.value.title = '新增字段'
+      tableDialog.value.form.newColumn = {
+        name: '',
+        type: 'VARCHAR(255)',
+        nullable: true,
+        defaultValue: '',
+        comment: ''
+      }
+      break
+  }
+}
+
+async function executeTableAction() {
+  try {
+    const { database, table } = contextMenu.value.data
+    const { action, form } = tableDialog.value
+    
+    // 构造 SQL 语句
+    let sql = ''
+    
+    switch (action) {
+      case 'rename':
+        if (!form.newTableName || form.newTableName === table) {
+          return
+        }
+        sql = `RENAME TABLE \`${database}\`.\`${table}\` TO \`${database}\`.\`${form.newTableName}\``
+        break
+      case 'comment':
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` COMMENT = '${form.comment.replace(/'/g, "\\'")}'`
+        break
+      case 'engine':
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` ENGINE = ${form.engine}`
+        break
+      case 'charset':
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` CONVERT TO CHARACTER SET ${form.charset} COLLATE ${form.collation}`
+        break
+      case 'addColumn':
+        if (!form.newColumn.name) {
+          return
+        }
+        let columnDef = `\`${form.newColumn.name}\` ${form.newColumn.type}`
+        if (!form.newColumn.nullable) {
+          columnDef += ' NOT NULL'
+        }
+        if (form.newColumn.defaultValue) {
+          columnDef += ` DEFAULT '${form.newColumn.defaultValue.replace(/'/g, "\\'")}'`
+        }
+        if (form.newColumn.comment) {
+          columnDef += ` COMMENT '${form.newColumn.comment.replace(/'/g, "\\'")}'`
+        }
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` ADD COLUMN ${columnDef}`
+        break
+    }
+    
+    if (sql) {
+      // 执行 SQL（这里暂时使用 queryApi，后续可添加专门的 API）
+      await queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+      
+      // 提示成功并刷新数据
+      // Element Plus 的 ElMessage 需要单独导入
+      console.log('操作成功：', sql)
+    }
+    
+    tableDialog.value.visible = false
+  } catch (error: any) {
+    console.error('操作失败：', error)
+  }
+}
+
+function handleTableDialogClosed() {
+  // 重置表单
+  tableDialog.value.form = {
+    newTableName: '',
+    comment: '',
+    engine: '',
+    charset: '',
+    collation: '',
+    newColumn: {
+      name: '',
+      type: '',
+      nullable: true,
+      defaultValue: '',
+      comment: ''
+    }
+  }
+}
+
+function confirmDropTable() {
+  hideContextMenu()
+  const { database, table } = contextMenu.value.data
+  // 使用原生 confirm，后续可改为 Element Plus 的 ElMessageBox
+  if (confirm(`确定要删除表 \`${database}\`.\`${table}\` 吗？此操作不可恢复！`)) {
+    try {
+      const sql = `DROP TABLE \`${database}\`.\`${table}\``
+      queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+      console.log('表删除成功')
+    } catch (error) {
+      console.error('删除表失败：', error)
+    }
+  }
+}
+
+function confirmTruncateTable() {
+  hideContextMenu()
+  const { database, table } = contextMenu.value.data
+  if (confirm(`确定要清空表 \`${database}\`.\`${table}\` 的所有数据吗？此操作不可恢复！`)) {
+    try {
+      const sql = `TRUNCATE TABLE \`${database}\`.\`${table}\``
+      queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+      console.log('表清空成功')
+    } catch (error) {
+      console.error('清空表失败：', error)
+    }
+  }
+}
+
+// ==================== 字段节点右键菜单操作 ====================
+
+function openColumnDialog(action: 'rename' | 'type' | 'nullable' | 'default' | 'comment' | 'addAfter') {
+  hideContextMenu()
+  
+  columnDialog.value.action = action
+  columnDialog.value.visible = true
+  
+  // 根据不同操作设置标题和初始值
+  const { columnName, columnType, nullable, defaultValue, comment } = contextMenu.value.data
+  
+  switch (action) {
+    case 'rename':
+      columnDialog.value.title = '修改字段名'
+      columnDialog.value.form.newColumnName = columnName || ''
+      break
+    case 'type':
+      columnDialog.value.title = '修改字段类型'
+      columnDialog.value.form.newType = columnType || ''
+      break
+    case 'nullable':
+      columnDialog.value.title = '修改字段是否允许为 NULL'
+      columnDialog.value.form.nullable = nullable || false
+      break
+    case 'default':
+      columnDialog.value.title = '修改默认值'
+      columnDialog.value.form.defaultValue = defaultValue || ''
+      break
+    case 'comment':
+      columnDialog.value.title = '修改字段注释'
+      columnDialog.value.form.comment = comment || ''
+      break
+    case 'addAfter':
+      columnDialog.value.title = '在后面插入新字段'
+      columnDialog.value.form.newColumn = {
+        name: '',
+        type: 'VARCHAR(255)',
+        nullable: true,
+        defaultValue: '',
+        comment: ''
+      }
+      break
+  }
+}
+
+async function executeColumnAction() {
+  try {
+    const { database, table, columnName } = contextMenu.value.data
+    const { action, form } = columnDialog.value
+    
+    let sql = ''
+    
+    switch (action) {
+      case 'rename':
+        if (!form.newColumnName || form.newColumnName === columnName) {
+          return
+        }
+        // 注意：MySQL 的 RENAME COLUMN 需要知道旧的完整定义
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` RENAME COLUMN \`${columnName}\` TO \`${form.newColumnName}\``
+        break
+      case 'type':
+        if (!form.newType) {
+          return
+        }
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` MODIFY COLUMN \`${columnName}\` ${form.newType}`
+        break
+      case 'nullable':
+        // 这里需要知道完整的列定义
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` MODIFY COLUMN \`${columnName}\` ${contextMenu.value.data.columnType} ${form.nullable ? 'NULL' : 'NOT NULL'}`
+        break
+      case 'default':
+        if (form.defaultValue) {
+          sql = `ALTER TABLE \`${database}\`.\`${table}\` ALTER COLUMN \`${columnName}\` SET DEFAULT '${form.defaultValue.replace(/'/g, "\\'")}'`
+        } else {
+          sql = `ALTER TABLE \`${database}\`.\`${table}\` ALTER COLUMN \`${columnName}\` DROP DEFAULT`
+        }
+        break
+      case 'comment':
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` MODIFY COLUMN \`${columnName}\` ${contextMenu.value.data.columnType} COMMENT '${form.comment.replace(/'/g, "\\'")}'`
+        break
+      case 'addAfter':
+        if (!form.newColumn.name) {
+          return
+        }
+        let columnDef = `\`${form.newColumn.name}\` ${form.newColumn.type}`
+        if (!form.newColumn.nullable) {
+          columnDef += ' NOT NULL'
+        }
+        if (form.newColumn.defaultValue) {
+          columnDef += ` DEFAULT '${form.newColumn.defaultValue.replace(/'/g, "\\'")}'`
+        }
+        if (form.newColumn.comment) {
+          columnDef += ` COMMENT '${form.newColumn.comment.replace(/'/g, "\\'")}'`
+        }
+        sql = `ALTER TABLE \`${database}\`.\`${table}\` ADD COLUMN ${columnDef} AFTER \`${columnName}\``
+        break
+    }
+    
+    if (sql) {
+      await queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+      console.log('操作成功：', sql)
+    }
+    
+    columnDialog.value.visible = false
+  } catch (error: any) {
+    console.error('操作失败：', error)
+  }
+}
+
+function handleColumnDialogClosed() {
+  columnDialog.value.form = {
+    newColumnName: '',
+    newType: '',
+    nullable: false,
+    defaultValue: '',
+    comment: '',
+    newColumn: {
+      name: '',
+      type: '',
+      nullable: true,
+      defaultValue: '',
+      comment: ''
+    }
+  }
+}
+
+function togglePrimaryKey() {
+  hideContextMenu()
+  const { database, table, columnName, isPrimary } = contextMenu.value.data
+  
+  let sql = ''
+  if (isPrimary) {
+    // 取消主键（需要先检查是否有主键约束）
+    sql = `ALTER TABLE \`${database}\`.\`${table}\` DROP PRIMARY KEY`
+    if (confirm(`确定要取消字段 \`${columnName}\` 的主键约束吗？`)) {
+      queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+    }
+  } else {
+    // 设置为主键（需要先确保没有其他主键）
+    sql = `ALTER TABLE \`${database}\`.\`${table}\` ADD PRIMARY KEY (\`${columnName}\`)`
+    if (confirm(`确定要将字段 \`${columnName}\` 设置为主键吗？`)) {
+      queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+    }
+  }
+}
+
+function confirmDropColumn() {
+  hideContextMenu()
+  const { database, table, columnName } = contextMenu.value.data
+  if (confirm(`确定要删除字段 \`${columnName}\` 吗？此操作不可恢复！`)) {
+    try {
+      const sql = `ALTER TABLE \`${database}\`.\`${table}\` DROP COLUMN \`${columnName}\``
+      queryApi.executeQuery({
+        connectionId: props.connectionId,
+        database,
+        sql
+      })
+      console.log('字段删除成功')
+    } catch (error) {
+      console.error('删除字段失败：', error)
+    }
+  }
+}
+
+async function copyColumnName(name: string) {
+  hideContextMenu()
+  try {
+    await navigator.clipboard.writeText(name)
+    console.log('字段名已复制：', name)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = name
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
 }
 
 async function handleNodeClick(data: any) {
@@ -659,6 +1336,22 @@ function handleNodeCollapse(data: any) {
   }
 }
 
+async function refresh() {
+  // 清空树数据，强制重新懒加载
+  treeData.value = []
+  
+  // 清除勾选状态和展开状态
+  workspaceStore.clearCheckedTables()
+  workspaceStore.clearExpandedKeys()
+  
+  // 重新加载数据库列表
+  await loadDatabases()
+  
+  // 等待 DOM 更新后，重新设置复选框隐藏逻辑
+  await nextTick()
+  hideNonTableCheckboxes()
+}
+
 defineExpose({
   getCheckedTables: () => {
     const checkedNodes = treeRef.value?.getCheckedNodes() || []
@@ -670,6 +1363,7 @@ defineExpose({
     treeRef.value?.setCheckedKeys([])
     workspaceStore.clearCheckedTables()
   },
+  refresh,
 })
 </script>
 
@@ -1062,5 +1756,62 @@ defineExpose({
   to {
     transform: rotate(360deg);
   }
+}
+
+// ==================== 右键菜单样式 ====================
+
+.context-menu {
+  position: fixed;
+  z-index: 99999;
+  min-width: 180px;
+  background: #ffffff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  font-size: 13px;
+  user-select: none;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: #303133;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background-color: #ecf5ff;
+    color: #409eff;
+  }
+
+  &.danger {
+    color: #f56c6c;
+
+    &:hover {
+      background-color: #fef0f0;
+      color: #f56c6c;
+    }
+  }
+
+  .el-icon {
+    margin-right: 8px;
+    font-size: 14px;
+  }
+}
+
+.context-menu-divider {
+  height: 1px;
+  background-color: #e4e7ed;
+  margin: 4px 0;
+}
+
+// ==================== 对话框表单样式 ====================
+
+.add-column-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 </style>
