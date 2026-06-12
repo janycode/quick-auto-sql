@@ -93,7 +93,10 @@ function getColumnLabel(col: string): string {
   if (showComments.value && props.result?.columnComments[col]) {
     const fullComment = removeNewlines(props.result.columnComments[col]);
     // 如果包含冒号，按第一个冒号截断，保留左侧
-    const colonIndex = fullComment.indexOf(':');
+    const enColon = fullComment.indexOf(':');
+    const cnColon = fullComment.indexOf('\uff1a');
+    const candidates = [enColon, cnColon].filter(i => i >= 0);
+    const colonIndex = candidates.length > 0 ? Math.min(...candidates) : -1;
     if (colonIndex > 0) {
       return fullComment.substring(0, colonIndex).trim();
     }
