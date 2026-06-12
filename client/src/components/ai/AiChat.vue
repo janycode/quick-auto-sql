@@ -9,7 +9,7 @@
         <span style="margin-left: 2px">历史</span>
       </el-button>
     </div>
-    <div class="ai-panel-body">
+    <div ref="panelBody" class="ai-panel-body">
       <!-- 已选表 -->
       <div style="margin-bottom: 12px">
         <div class="table-header">
@@ -42,17 +42,34 @@
           <span class="loading-text">{{ loadingHint }}{{ loadingDots }}</span>
         </div>
         <div v-else class="ai-sql-output">
+          <div class="sql-label">原始 SQL</div>
           <pre><code v-html="highlightSql(workspaceStore.aiGeneratedSql)"></code></pre>
         </div>
-        <el-button
-          v-if="workspaceStore.aiGeneratedSql && !generating"
-          type="primary"
-          size="small"
-          style="margin-top: 8px; width: 100%"
-          @click="handleUseSql"
-        >
-          使用此 SQL
-        </el-button>
+        <div v-if="workspaceStore.aiGeneratedSql && !generating" class="ai-actions">
+          <el-button type="primary" size="small" @click="handleUseSql">使用此 SQL</el-button>
+          <el-button type="success" size="small" :loading="optimizing" @click="handleOptimize">优化写法</el-button>
+        </div>
+
+        <!-- 优化后的 SQL（显示在下方） -->
+        <div v-if="workspaceStore.aiOptimizedSql || optimizing" class="ai-optimized-output">
+          <div v-if="optimizing && !workspaceStore.aiOptimizedSql" class="ai-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span class="loading-text">{{ optimizingHint }}{{ loadingDots }}</span>
+          </div>
+          <div v-else class="ai-sql-output optimized">
+            <div class="sql-label">优化后 SQL</div>
+            <pre><code v-html="highlightSql(workspaceStore.aiOptimizedSql)"></code></pre>
+          </div>
+          <el-button
+            v-if="workspaceStore.aiOptimizedSql && !optimizing"
+            type="success"
+            size="small"
+            style="margin-top: 8px; width: 100%"
+            @click="handleUseOptimizedSql"
+          >
+            使用优化后的 SQL
+          </el-button>
+        </div>
       </div>
     </div>
     <div class="ai-panel-footer">
@@ -163,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy } from '@element-plus/icons-vue'
 import hljs from 'highlight.js'
 import type { IAiHistory } from '@/api/ai'
@@ -196,7 +213,17 @@ const question = computed({
   set: (v: string) => workspaceStore.setAiQuestion(v),
 })
 const generating = ref(false)
+const optimizing = ref(false)
 let abortController: AbortController | null = null
+const panelBody = ref<HTMLElement | null>(null)
+
+function scrollPanelToBottom() {
+  nextTick(() => {
+    if (panelBody.value) {
+      panelBody.value.scrollTop = panelBody.value.scrollHeight
+    }
+  })
+}
 
 // 动态加载提示
 const loadingHintTexts = [
@@ -209,6 +236,7 @@ const loadingHintTexts = [
 ]
 const loadingHint = ref(loadingHintTexts[0])
 const loadingDots = ref('')
+const optimizingHint = ref('')
 let loadingTimer: ReturnType<typeof setInterval> | null = null
 let hintTimer: ReturnType<typeof setInterval> | null = null
 
@@ -221,10 +249,11 @@ onUnmounted(() => {
   if (hintTimer) clearInterval(hintTimer)
 })
 
-import { watch } from 'vue'
-watch(generating, (val) => {
-  if (val) {
-    loadingHint.value = loadingHintTexts[0]
+// 监听 generating / optimizing 状态，切换加载提示
+watch([generating, optimizing], ([gen, opt]) => {
+  const isLoading = gen || opt
+  if (isLoading) {
+    if (opt) optimizingHint.value = '正在执行 EXPLAIN 并优化 SQL'
     loadingDots.value = '.'
     let dotCount = 1
     let hintIndex = 0
@@ -235,8 +264,14 @@ watch(generating, (val) => {
       loadingDots.value = '.'.repeat(dotCount)
     }, 500)
     hintTimer = setInterval(() => {
-      hintIndex = (hintIndex + 1) % loadingHintTexts.length
-      loadingHint.value = loadingHintTexts[hintIndex]
+      if (gen) {
+        hintIndex = (hintIndex + 1) % loadingHintTexts.length
+        loadingHint.value = loadingHintTexts[hintIndex]
+      } else if (opt) {
+        const optHints = ['正在执行 EXPLAIN 分析执行计划', '正在根据 EXPLAIN 结果改写 SQL', '正在为你生成优化后的 SQL']
+        hintIndex = (hintIndex + 1) % optHints.length
+        optimizingHint.value = optHints[hintIndex]
+      }
     }, 3000)
   } else {
     if (loadingTimer) clearInterval(loadingTimer)
@@ -384,57 +419,170 @@ async function handleGenerate() {
 
   generating.value = true
   workspaceStore.setAiGeneratedSql('')
-  const rawSql = ref('')
+  workspaceStore.setAiOptimizedSql('')
 
-  const tableNames = workspaceStore.checkedTables.map(t => t.table)
+  const tableNames = workspaceStore.checkedTables.map((t: any) => t.table)
   const connectionId = connectionStore.activeConnection.id
   const currentQuestion = question.value.trim()
 
-  abortController = fetchSSE('/api/ai/generate', {
-    connectionId,
-    database,
-    tables: tableNames,
-    question: currentQuestion,
-  }, {
-    onMessage: (data: any) => {
-      if (data.type === 'thinking') {
-        // 思考中，不显示
-      } else if (data.type === 'sql') {
-        rawSql.value += data.content
-        workspaceStore.setAiGeneratedSql(rawSql.value)
-      } else if (data.type === 'error') {
-        ElMessage.error(data.content)
-      } else if (data.type === 'done') {
-        const finalSql = formatSql(rawSql.value)
-        workspaceStore.setAiGeneratedSql(finalSql)
+  // 单次请求：返回 Promise；失败或无结果则 reject
+  function callGenerateOnce() {
+    return new Promise<string>((resolve, reject) => {
+      let rawBuffer = ''
+      let gotAnySql = false
+      let gotDone = false
+
+      const ctrl = fetchSSE('/api/ai/generate', {
+        connectionId,
+        database,
+        tables: tableNames,
+        question: currentQuestion,
+      }, {
+        onMessage: (data: any) => {
+          if (data.type === 'thinking') {
+            // 思考中
+          } else if (data.type === 'sql') {
+            gotAnySql = true
+            rawBuffer += data.content
+            workspaceStore.setAiGeneratedSql(rawBuffer)
+          } else if (data.type === 'error') {
+            reject(new Error(data.content || 'AI 接口返回错误'))
+          } else if (data.type === 'done') {
+            gotDone = true
+            const finalSql = formatSql(rawBuffer)
+            workspaceStore.setAiGeneratedSql(finalSql)
+            if (gotAnySql && finalSql.trim()) {
+              resolve(finalSql)
+            } else {
+              reject(new Error('NO_RESULT'))
+            }
+          }
+        },
+        onError: (error: any) => {
+          reject(error)
+        },
+        onComplete: () => {
+          // 流结束但没有收到 done + 有效内容时
+          if (!gotDone) {
+            const finalSql = formatSql(rawBuffer)
+            if (gotAnySql && finalSql.trim()) {
+              resolve(finalSql)
+            } else {
+              reject(new Error('NO_RESULT'))
+            }
+          }
+        },
+      })
+
+      abortController = ctrl
+    })
+  }
+
+  try {
+    let result = ''
+    try {
+      result = await callGenerateOnce()
+    } catch (firstError: any) {
+      // 首次失败：自动重试一次
+      workspaceStore.setAiGeneratedSql('')
+      try {
+        result = await callGenerateOnce()
+      } catch {
+        // 重试也失败：统一提示"服务器繁忙"
+        ElMessage.error('AI接口服务器繁忙，请再次尝试')
         generating.value = false
-        if (finalSql && finalSql.trim()) {
-          aiStore.addHistory({
-            connectionId,
-            database,
-            tables: tableNames,
-            question: currentQuestion,
-            sql: finalSql,
-          }).catch(err => {
-            console.error('保存历史失败:', err)
-          })
-        }
+        return
       }
-    },
-    onError: (error: any) => {
-      ElMessage.error(error.message)
-      generating.value = false
-    },
-    onComplete: () => {
-      generating.value = false
-    },
-  })
+    }
+
+    // 成功：保存历史
+    generating.value = false
+    if (result && result.trim()) {
+      aiStore.addHistory({
+        connectionId,
+        database,
+        tables: tableNames,
+        question: currentQuestion,
+        sql: result,
+      }).catch(err => {
+        console.error('保存历史失败:', err)
+      })
+    }
+  } catch {
+    generating.value = false
+    ElMessage.error('AI接口服务器繁忙，请再次尝试')
+  }
 }
 
 function handleUseSql() {
   if (workspaceStore.aiGeneratedSql) {
     emit('use-sql', workspaceStore.aiGeneratedSql)
   }
+}
+
+function handleUseOptimizedSql() {
+  if (workspaceStore.aiOptimizedSql) {
+    emit('use-sql', workspaceStore.aiOptimizedSql)
+  }
+}
+
+async function handleOptimize() {
+  if (!workspaceStore.aiGeneratedSql.trim()) {
+    ElMessage.warning('请先生成 SQL')
+    return
+  }
+  if (!connectionStore.activeConnection) {
+    ElMessage.warning('请先选择数据库连接')
+    return
+  }
+  const database = workspaceStore.checkedTables[0]?.database || connectionStore.activeConnection.database || ''
+  if (!database) {
+    ElMessage.warning('请先选择数据库')
+    return
+  }
+  if (!aiStore.config.apiKey) {
+    ElMessage.warning('请先配置 AI API Key')
+    return
+  }
+
+  optimizing.value = true
+  workspaceStore.setAiOptimizedSql('')
+  const rawOpt = ref('')
+
+  const tableNames = workspaceStore.checkedTables.map((t: any) => t.table)
+  const connectionId = connectionStore.activeConnection.id
+
+  abortController = fetchSSE('/api/ai/optimize', {
+    connectionId,
+    database,
+    sql: workspaceStore.aiGeneratedSql,
+    tables: tableNames,
+  }, {
+    onMessage: (data: any) => {
+      if (data.type === 'thinking') {
+        // 思考中
+      } else if (data.type === 'sql') {
+        rawOpt.value += data.content
+        workspaceStore.setAiOptimizedSql(rawOpt.value)
+        scrollPanelToBottom()
+      } else if (data.type === 'error') {
+        ElMessage.error(data.content)
+      } else if (data.type === 'done') {
+        const finalSql = formatSql(rawOpt.value)
+        workspaceStore.setAiOptimizedSql(finalSql)
+        optimizing.value = false
+        scrollPanelToBottom()
+      }
+    },
+    onError: (error: any) => {
+      ElMessage.error(error.message)
+      optimizing.value = false
+    },
+    onComplete: () => {
+      optimizing.value = false
+      scrollPanelToBottom()
+    },
+  })
 }
 
 defineExpose({ setCheckedTables })
@@ -525,6 +673,39 @@ defineExpose({ setCheckedTables })
     :deep(.hljs-keyword) { color: #c7254e; }
     :deep(.hljs-string) { color: #22863a; }
     :deep(.hljs-number) { color: #005cc5; }
+
+    &.optimized {
+      background: #f0f9eb;
+      border: 1px dashed #67c23a;
+    }
+
+    .sql-label {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #606266;
+      padding: 2px 8px;
+      background: #fff;
+      border: 1px solid #dcdfe6;
+      border-radius: 3px;
+      margin-bottom: 8px;
+    }
+  }
+
+  .ai-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+
+    .el-button {
+      flex: 1;
+    }
+  }
+
+  .ai-optimized-output {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed #dcdfe6;
   }
 }
 

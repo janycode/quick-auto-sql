@@ -139,6 +139,35 @@ router.post('/generate', asyncHandler(async (req: Request, res: Response) => {
   }
 }));
 
+// 根据 EXPLAIN 结果优化 SQL（SSE 流式）
+router.post('/optimize', asyncHandler(async (req: Request, res: Response) => {
+  const { connectionId, database, sql, tables } = req.body || {};
+  if (!connectionId || !database || !sql) {
+    fail(res, 'connectionId、database 和 sql 参数必填');
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const sendSse = (msg: ISseMessage) => {
+    res.write(`data: ${JSON.stringify(msg)}\n\n`);
+  };
+
+  try {
+    await aiService.optimizeSqlStream(
+      { connectionId, database, sql, tables: tables || [] },
+      sendSse
+    );
+  } catch (error: any) {
+    sendSse({ type: 'error', content: error.message });
+  } finally {
+    res.end();
+  }
+}));
+
 // ==================== 提示词模板管理 ====================
 
 // 获取所有提示词模板

@@ -288,7 +288,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as monaco from 'monaco-editor'
 import { formatSql } from '@/utils/sql-formatter'
 import * as aiApi from '@/api/ai'
-import type { IDatabase } from '@/api/database'
+import * as databaseApi from '@/api/database'
+import type { IDatabase, IColumn } from '@/api/database'
 import hljs from 'highlight.js/lib/core'
 import hljsSql from 'highlight.js/lib/languages/sql'
 // 不引入 highlight.js 主题文件，使用下方自定义的浅色语法配色
@@ -393,6 +394,8 @@ const props = defineProps<{
   executing?: boolean
   selectedDatabase?: string
   connectionId?: string
+  tableNames?: string[]
+  columnsByTable?: Record<string, IColumn[]>
 }>()
 
 const emit = defineEmits<{
@@ -404,6 +407,434 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLElement>()
 const currentDatabase = ref('')
 let editor: monaco.editor.IStandaloneCodeEditor | null = null
+
+// ============================================================
+// SQL 编辑器增强：IntelliSense 补全 + 实时语法检查
+// ============================================================
+
+// 1. SQL 关键字 / 函数列表（用于补全 + 拼写检查）
+const SQL_KEYWORDS = [
+  'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL',
+  'AS', 'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET',
+  'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
+  'CREATE', 'DROP', 'ALTER', 'TABLE', 'INDEX', 'VIEW', 'DATABASE', 'SCHEMA',
+  'TRUNCATE', 'REPLACE', 'RENAME',
+  'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'ON', 'CROSS',
+  'UNION', 'ALL', 'DISTINCT', 'DISTINCTROW',
+  'EXISTS', 'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'WITH', 'RECURSIVE',
+  'TRUE', 'FALSE',
+  'ASC', 'DESC',
+  'IF', 'IFNULL', 'NULLIF', 'COALESCE', 'CAST', 'CONVERT',
+  'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ROUND', 'FLOOR', 'CEIL', 'ABS',
+  'NOW', 'CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME', 'DATE', 'TIME',
+  'CONCAT', 'SUBSTRING', 'LENGTH', 'LOWER', 'UPPER', 'TRIM', 'LTRIM', 'RTRIM',
+  'REPLACE', 'LEFT', 'RIGHT', 'LPAD', 'RPAD', 'LOCATE', 'INSTR',
+  'GROUP_CONCAT', 'JSON_EXTRACT', 'JSON_UNQUOTE',
+  'EXPLAIN', 'DESCRIBE', 'DESC', 'SHOW', 'USE',
+  'PRIMARY', 'KEY', 'UNIQUE', 'FOREIGN', 'REFERENCES', 'DEFAULT',
+  'AUTO_INCREMENT', 'ENGINE', 'CHARSET', 'COLLATE', 'COMMENT',
+  'INT', 'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT',
+  'VARCHAR', 'CHAR', 'TEXT', 'MEDIUMTEXT', 'LONGTEXT',
+  'DECIMAL', 'NUMERIC', 'FLOAT', 'DOUBLE', 'REAL',
+  'DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'YEAR',
+  'BOOLEAN', 'BOOL', 'BINARY', 'VARBINARY', 'BLOB', 'ENUM', 'SET', 'JSON',
+]
+const SQL_KEYWORD_SET = new Set(SQL_KEYWORDS.map((k) => k.toUpperCase()))
+
+// 为补全缓存字段信息（表名 -> IColumn[]）
+// 既接收上层传入的 columnsByTable，也在用户输入 `表名.` 时按需异步填充
+const columnFetchPromises = new Map<string, Promise<IColumn[] | null>>()
+function resolveTableColumns(tableName: string): IColumn[] {
+  const byTable = props.columnsByTable
+  if (byTable && byTable[tableName]) return byTable[tableName]
+  return []
+}
+function getOrFetchColumns(tableName: string): Promise<IColumn[] | null> {
+  const byTable = props.columnsByTable
+  if (byTable && byTable[tableName]) return Promise.resolve(byTable[tableName])
+  const cacheKey = `${props.connectionId || ''}::${currentDatabase.value || props.selectedDatabase || ''}::${tableName}`
+  const hit = columnFetchPromises.get(cacheKey)
+  if (hit) return hit
+  if (!props.connectionId || !currentDatabase.value) return Promise.resolve(null)
+  const p = databaseApi
+    .getColumns(props.connectionId, currentDatabase.value, tableName)
+    .then((r) => (r?.data || []) as IColumn[])
+    .catch(() => null)
+  columnFetchPromises.set(cacheKey, p)
+  return p
+}
+
+// 从编辑器文本提取已出现的表名（简单解析：紧跟 FROM/JOIN 的标识符）
+function extractReferencedTableNames(text: string): string[] {
+  const names = new Set<string>()
+  const re = /\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+([`"]?)([\w$]+)\1(?:\s+(?:AS\s+)?([`"]?)([\w$]+)\3)?/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    if (m[2]) names.add(m[2])
+    if (m[4]) names.add(m[4])
+  }
+  return Array.from(names)
+}
+
+// 构建 CompletionItem
+function makeCompletionItem(
+  label: string,
+  kind: monaco.languages.CompletionItemKind,
+  detail?: string,
+  insertText?: string
+): monaco.languages.CompletionItem {
+  return {
+    label,
+    kind,
+    detail,
+    insertText: insertText || label,
+    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    sortText: label,
+  }
+}
+
+// 注册 SQL 补全提供者
+let completionProvider: monaco.IDisposable | null = null
+function registerCompletionProvider() {
+  completionProvider = monaco.languages.registerCompletionItemProvider('sql', {
+    triggerCharacters: ['.', ' ', '\n'],
+    provideCompletionItems: (model, position) => {
+      const word = model.getWordUntilPosition(position)
+      const range: monaco.IRange = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      }
+      const suggestions: monaco.languages.CompletionItem[] = []
+      const textUntil = model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      })
+
+      // --- 场景 1：输入 `表名.`，补全该表字段 ---
+      const beforeWord = textUntil.slice(0, Math.max(0, textUntil.length - (word?.word?.length || 0)))
+      const dotMatch = beforeWord.match(/([`"]?)([\w$]+)\1\.\s*$/)
+      if (dotMatch) {
+        const tableName = dotMatch[2]
+        const cols = resolveTableColumns(tableName)
+        for (const col of cols) {
+          const item = makeCompletionItem(
+            col.name,
+            monaco.languages.CompletionItemKind.Field,
+            `${col.type}${col.comment ? ` — ${col.comment}` : ''}`
+          )
+          item.range = range
+          suggestions.push(item)
+        }
+        // 如果本地没这个表的字段信息，异步拉取后不阻塞当前返回，下次输入就会命中
+        if (!cols.length) {
+          getOrFetchColumns(tableName).then((freshCols) => {
+            if (!freshCols || !freshCols.length) return
+            // 下次 provider 被调用时会使用到缓存（通过 props.columnsByTable 填充给父组件，这里不需要手动触发刷新）
+          })
+        }
+        if (suggestions.length) return { suggestions, incomplete: false }
+      }
+
+      // --- 场景 2：关键字补全 ---
+      const kwPrefix = (word?.word || '').toUpperCase()
+      for (const kw of SQL_KEYWORDS) {
+        if (!kwPrefix || kw.startsWith(kwPrefix)) {
+          const item = makeCompletionItem(kw, monaco.languages.CompletionItemKind.Keyword, 'SQL 关键字')
+          item.range = range
+          suggestions.push(item)
+        }
+      }
+
+      // --- 场景 3：表名补全 ---
+      const referencedTables = extractReferencedTableNames(model.getValue())
+      const tableNames = new Set<string>(props.tableNames || [])
+      for (const t of referencedTables) tableNames.add(t)
+      for (const t of tableNames) {
+        if (!kwPrefix || t.toUpperCase().startsWith(kwPrefix) || t.startsWith(word?.word || '')) {
+          const item = makeCompletionItem(t, monaco.languages.CompletionItemKind.Struct, '表')
+          item.range = range
+          suggestions.push(item)
+        }
+      }
+
+      // --- 场景 4：字段名补全（从本地已解析表和 props.columnsByTable 汇总）---
+      const knownColumns = new Map<string, string>()
+      const addCol = (name: string, meta: string) => {
+        const prev = knownColumns.get(name)
+        if (!prev || prev.length > meta.length) knownColumns.set(name, meta)
+      }
+      for (const t of tableNames) {
+        const cols = resolveTableColumns(t)
+        for (const c of cols) addCol(c.name, `${c.type} · ${t}${c.comment ? ` — ${c.comment}` : ''}`)
+      }
+      for (const [col, meta] of knownColumns) {
+        if (!kwPrefix || col.toUpperCase().startsWith(kwPrefix) || col.startsWith(word?.word || '')) {
+          const item = makeCompletionItem(col, monaco.languages.CompletionItemKind.Field, meta)
+          item.range = range
+          suggestions.push(item)
+        }
+      }
+
+      return { suggestions, incomplete: false }
+    },
+  })
+}
+
+// ------------------------------------------------------------
+// 轻量词法分析（用于 Monaco 的 Marker 红波浪线提示）
+// 检查项：
+//   - 未闭合的字符串/反引号
+//   - 括号不匹配
+//   - 疑似错误关键字拼写（编辑区内大写化校验）
+//   - SELECT 语句缺失 FROM/WHERE 关键字的拼写（极简启发式）
+// ------------------------------------------------------------
+interface ISyntaxIssue {
+  startLineNumber: number
+  startColumn: number
+  endLineNumber: number
+  endColumn: number
+  message: string
+  severity: 'error' | 'warning'
+}
+
+function analyzeSqlSyntax(text: string): ISyntaxIssue[] {
+  const issues: ISyntaxIssue[] = []
+  if (!text) return issues
+
+  const lines = text.split(/\r?\n/)
+  let inSingleString = false
+  let inDoubleString = false
+  let inBacktick = false
+  let inLineComment = false
+  let inBlockComment = false
+  let bracketDepth = 0
+  let bracketOpenPos: { line: number; col: number } | null = null
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]
+    inLineComment = false
+    let i = 0
+    while (i < line.length) {
+      const ch = line[i]
+      const next = line[i + 1]
+
+      // 行注释 --
+      if (!inSingleString && !inDoubleString && !inBacktick && !inBlockComment && ch === '-' && next === '-') {
+        inLineComment = true
+        break
+      }
+      // 块注释 /* */
+      if (!inSingleString && !inDoubleString && !inBacktick && !inLineComment && ch === '/' && next === '*') {
+        inBlockComment = true
+        i += 2
+        continue
+      }
+      if (inBlockComment && ch === '*' && next === '/') {
+        inBlockComment = false
+        i += 2
+        continue
+      }
+      if (inBlockComment) {
+        i++
+        continue
+      }
+
+      // 字符串/反引号配对
+      if (!inLineComment) {
+        if (ch === "'" && !inDoubleString && !inBacktick) {
+          if (inSingleString && next === "'") {
+            i += 2 // 转义 ''
+            continue
+          }
+          inSingleString = !inSingleString
+          i++
+          continue
+        }
+        if (ch === '"' && !inSingleString && !inBacktick) {
+          inDoubleString = !inDoubleString
+          i++
+          continue
+        }
+        if (ch === '`' && !inSingleString && !inDoubleString) {
+          inBacktick = !inBacktick
+          i++
+          continue
+        }
+        if (!inSingleString && !inDoubleString && !inBacktick) {
+          if (ch === '(') {
+            bracketDepth++
+            if (!bracketOpenPos) bracketOpenPos = { line: lineIdx, col: i }
+            i++
+            continue
+          }
+          if (ch === ')') {
+            if (bracketDepth === 0) {
+              issues.push({
+                startLineNumber: lineIdx + 1,
+                startColumn: i + 1,
+                endLineNumber: lineIdx + 1,
+                endColumn: i + 2,
+                message: '多余的右括号',
+                severity: 'error',
+              })
+            } else {
+              bracketDepth--
+              if (bracketDepth === 0) bracketOpenPos = null
+            }
+            i++
+            continue
+          }
+        }
+      }
+
+      i++
+    }
+
+    if (inSingleString) {
+      issues.push({
+        startLineNumber: lineIdx + 1,
+        startColumn: 1,
+        endLineNumber: lineIdx + 1,
+        endColumn: line.length + 1,
+        message: '未闭合的单引号字符串',
+        severity: 'error',
+      })
+      inSingleString = false
+    }
+    if (inDoubleString) {
+      issues.push({
+        startLineNumber: lineIdx + 1,
+        startColumn: 1,
+        endLineNumber: lineIdx + 1,
+        endColumn: line.length + 1,
+        message: '未闭合的双引号字符串',
+        severity: 'error',
+      })
+      inDoubleString = false
+    }
+  }
+
+  if (inBacktick) {
+    const last = lines.length
+    issues.push({
+      startLineNumber: last,
+      startColumn: 1,
+      endLineNumber: last,
+      endColumn: (lines[last - 1]?.length || 1) + 1,
+      message: '未闭合的反引号标识符',
+      severity: 'error',
+    })
+  }
+  if (inBlockComment) {
+    const last = lines.length
+    issues.push({
+      startLineNumber: last,
+      startColumn: 1,
+      endLineNumber: last,
+      endColumn: (lines[last - 1]?.length || 1) + 1,
+      message: '未闭合的块注释 /* */',
+      severity: 'error',
+    })
+  }
+  if (bracketDepth > 0 && bracketOpenPos) {
+    issues.push({
+      startLineNumber: bracketOpenPos.line + 1,
+      startColumn: bracketOpenPos.col + 1,
+      endLineNumber: bracketOpenPos.line + 1,
+      endColumn: bracketOpenPos.col + 2,
+      message: `还有 ${bracketDepth} 个未闭合的左括号`,
+      severity: 'error',
+    })
+  }
+
+  // 关键字拼写错误（极简启发：取所有标识符，如与任一关键字的编辑距离=1 且本身不是关键字，则提示）
+  const idRegex = /[A-Za-z_][A-Za-z_0-9]*/g
+  const codeWithoutStrings = text.replace(/(?:--[^\n]*|\/\*[\s\S]*?\*\/|'[^']*'|"[^"]*"|`[^`]*`)/g, (m) => ' '.repeat(m.length))
+  let idMatch: RegExpExecArray | null
+  const checked = new Set<string>()
+  while ((idMatch = idRegex.exec(codeWithoutStrings))) {
+    const token = idMatch[0]
+    if (token.length < 3) continue
+    const upper = token.toUpperCase()
+    if (SQL_KEYWORD_SET.has(upper)) continue
+    if (checked.has(upper)) continue
+    checked.add(upper)
+    // 过滤看起来不像关键字的 token：全小写且长度<=3 基本不是关键字拼写（减少误报）
+    const isAllUpper = token === token.toUpperCase()
+    const firstLetterUpper = /^[A-Z]/.test(token)
+    if (!isAllUpper && !firstLetterUpper && token.length <= 4) continue
+    // 寻找最近的关键字
+    let bestKw = ''
+    let bestDist = Infinity
+    for (const kw of SQL_KEYWORDS) {
+      const d = levenshtein(upper, kw)
+      if (d < bestDist) {
+        bestDist = d
+        bestKw = kw
+      }
+    }
+    if (bestDist === 1) {
+      // 计算 token 在第几行第几列
+      const before = text.slice(0, idMatch.index)
+      const lineNum = before.split('\n').length
+      const lineStart = before.lastIndexOf('\n') + 1
+      const col = idMatch.index - lineStart + 1
+      issues.push({
+        startLineNumber: lineNum,
+        startColumn: col,
+        endLineNumber: lineNum,
+        endColumn: col + token.length,
+        message: `疑似拼写错误："${token}"，是否想写 "${bestKw}"？`,
+        severity: 'warning',
+      })
+    }
+  }
+
+  return issues
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0
+  if (!a.length) return b.length
+  if (!b.length) return a.length
+  let prev = new Array(b.length + 1).fill(0).map((_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const curr = new Array(b.length + 1).fill(0)
+    curr[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+    }
+    prev = curr
+  }
+  return prev[b.length]
+}
+
+function applyMarkers(model: monaco.editor.ITextModel) {
+  const issues = analyzeSqlSyntax(model.getValue())
+  const markers: monaco.editor.IMarkerData[] = issues.map((it) => ({
+    severity: it.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+    message: it.message,
+    startLineNumber: it.startLineNumber,
+    startColumn: it.startColumn,
+    endLineNumber: it.endLineNumber,
+    endColumn: it.endColumn,
+  }))
+  monaco.editor.setModelMarkers(model, 'sql-editor-enhanced', markers)
+}
+
+let markerDebounceTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleApplyMarkers(model: monaco.editor.ITextModel) {
+  if (markerDebounceTimer) clearTimeout(markerDebounceTimer)
+  markerDebounceTimer = setTimeout(() => {
+    applyMarkers(model)
+  }, 350)
+}
 
 const analyzing = ref(false)
 const explaining = ref(false)
@@ -778,17 +1209,69 @@ onMounted(() => {
       tabSize: 2,
     })
 
+    // 注册 SQL 关键字/表/字段 IntelliSense 补全
+    registerCompletionProvider()
+
+    // 初次及内容变化后做语法检查，350ms 防抖
+    const model = editor.getModel()
+    if (model) {
+      applyMarkers(model)
+    }
+
     editor.onDidChangeModelContent(() => {
       emit('update:modelValue', editor?.getValue() || '')
+      const m = editor?.getModel()
+      if (m) scheduleApplyMarkers(m)
     })
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       handleExecute()
     })
+
+    // 注册右键菜单项（同时出现在命令面板 F1）
+    // 选中 SQL 时按选区操作，无选中时对整个编辑器内容操作
+    editor.addAction({
+      id: 'sql-execute',
+      label: '执行 SQL',
+      contextMenuGroupId: 'sql-actions',
+      contextMenuOrder: 1,
+      keybindings: [],
+      run: () => handleExecute(),
+    })
+    editor.addAction({
+      id: 'sql-format',
+      label: '格式化 SQL',
+      contextMenuGroupId: 'sql-actions',
+      contextMenuOrder: 2,
+      keybindings: [],
+      run: () => handleFormat(),
+    })
+    editor.addAction({
+      id: 'sql-explain',
+      label: 'AI SQL 解释',
+      contextMenuGroupId: 'sql-actions',
+      contextMenuOrder: 3,
+      keybindings: [],
+      run: () => handleExplain(),
+    })
+    editor.addAction({
+      id: 'sql-analyze',
+      label: 'AI SQL 分析',
+      contextMenuGroupId: 'sql-actions',
+      contextMenuOrder: 4,
+      keybindings: [],
+      run: () => handleAnalyze(),
+    })
   }
 })
 
 onBeforeUnmount(() => {
+  if (editor) {
+    const model = editor.getModel()
+    if (model) monaco.editor.setModelMarkers(model, 'sql-editor-enhanced', [])
+  }
+  completionProvider?.dispose()
+  if (markerDebounceTimer) clearTimeout(markerDebounceTimer)
   editor?.dispose()
 })
 
@@ -804,15 +1287,46 @@ watch(() => props.selectedDatabase, (newDb) => {
   }
 })
 
+// 获取"当前有效 SQL"：优先使用选中文本；无选中时回退到全部文本
+function getActiveSql(): string | null {
+  if (!editor) return null
+  const selection = editor.getSelection()
+  if (selection) {
+    const selected = editor.getModel()?.getValueInRange(selection)?.trim()
+    if (selected) return selected
+  }
+  return editor.getValue()?.trim() || null
+}
+
 function handleExecute() {
-  const sql = editor?.getValue()?.trim()
+  const sql = getActiveSql()
   if (sql) {
     emit('execute', sql)
   }
 }
 
 function handleFormat() {
-  if (editor) {
+  if (!editor) return
+  const model = editor.getModel()
+  if (!model) return
+  const selection = editor.getSelection()
+  const selectedRange = selection && !selection.isEmpty() ? selection : null
+  if (selectedRange) {
+    const selected = model.getValueInRange(selectedRange)
+    const formatted = formatSql(selected)
+    editor.executeEdits('format-selection', [
+      { range: selectedRange, text: formatted },
+    ])
+    // 重新选中格式化后的区域
+    const lines = formatted.split(/\r?\n/)
+    const newEndCol = lines[lines.length - 1].length + 1
+    editor.setSelection({
+      startLineNumber: selectedRange.startLineNumber,
+      startColumn: 1,
+      endLineNumber: selectedRange.startLineNumber + lines.length - 1,
+      endColumn: newEndCol,
+    })
+  } else {
     const sql = editor.getValue()
     editor.setValue(formatSql(sql))
   }
@@ -820,8 +1334,7 @@ function handleFormat() {
 
 async function handleExplain() {
   if (!editor) return
-  const original = editor.getValue()
-  const sql = original.trim()
+  const sql = getActiveSql()
   if (!sql) {
     ElMessage.warning('请先输入 SQL')
     return
@@ -835,13 +1348,31 @@ async function handleExplain() {
       ElMessage.warning('未生成解释内容')
       return
     }
-    const lineBreak = original.includes('\r\n') ? '\r\n' : '\n'
+    const lineBreak = sql.includes('\r\n') ? '\r\n' : '\n'
     const commentLine = `-- ${explanation}`
-    const firstLineMatch = original.match(/^\s*--[^\r\n]*[\r\n]+/)
-    const newContent = firstLineMatch
-      ? commentLine + lineBreak + original.slice(firstLineMatch[0].length)
-      : commentLine + lineBreak + original
-    editor.setValue(newContent)
+    // 如果作用在选中文本上，用 edit 在选区前插入一行解释；否则整体替换
+    const model = editor.getModel()
+    const selection = editor.getSelection()
+    const hasSelection = selection && !selection.isEmpty()
+    if (hasSelection && model) {
+      const insertLine = selection!.startLineNumber
+      const range: monaco.IRange = {
+        startLineNumber: insertLine,
+        startColumn: 1,
+        endLineNumber: insertLine,
+        endColumn: 1,
+      }
+      editor.executeEdits('explain-sql', [
+        { range, text: commentLine + lineBreak },
+      ])
+    } else {
+      const original = editor.getValue()
+      const firstLineMatch = original.match(/^\s*--[^\r\n]*[\r\n]+/)
+      const newContent = firstLineMatch
+        ? commentLine + lineBreak + original.slice(firstLineMatch[0].length)
+        : commentLine + lineBreak + original
+      editor.setValue(newContent)
+    }
     ElMessage.success('已添加首行解释')
   } catch (e: any) {
     ElMessage.error(e?.message || 'SQL 解释失败')
@@ -888,7 +1419,7 @@ function stripLeadingCommentLines(sql: string): string {
 }
 
 async function handleAnalyze() {
-  const rawSql = editor?.getValue()?.trim()
+  const rawSql = getActiveSql()
   if (!rawSql) {
     ElMessage.warning('请先输入 SQL')
     return

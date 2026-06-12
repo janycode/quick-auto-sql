@@ -15,6 +15,8 @@
           :executing="workspaceStore.executing"
           :selected-database="workspaceStore.currentDatabase"
           :connection-id="connectionStore.activeConnection?.id"
+          :table-names="tableNames"
+          :columns-by-table="columnsByTable"
           @execute="handleExecute"
           @database-change="handleDatabaseChange"
         />
@@ -34,7 +36,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import SqlEditor from '@/components/editor/SqlEditor.vue'
@@ -46,6 +48,7 @@ import { useDatabaseStore } from '@/stores/database'
 import { useWorkspaceStore } from '@/stores/workspace'
 import * as databaseApi from '@/api/database'
 import * as queryApi from '@/api/query'
+import type { IColumn } from '@/api/database'
 
 const connectionStore = useConnectionStore()
 const databaseStore = useDatabaseStore()
@@ -55,21 +58,43 @@ const sqlEditorRef = ref()
 const aiChatRef = ref()
 const appSidebarRef = ref()
 const showConnectionDialog = ref(false)
-const databases = ref<{name: string; comment?: string}[]>([])
+const databases = ref<{ name: string; comment?: string }[]>([])
+
+// 给 SQL 编辑器补全用的表名 + 字段缓存
+const tableNames = computed(() => (databaseStore.tables || []).map((t: any) => t.name || t))
+const columnsByTable = ref<Record<string, IColumn[]>>({})
 
 onMounted(async () => {
   await connectionStore.fetchConnections()
 })
 
 // 监听活跃连接变化，加载数据库列表
-watch(() => connectionStore.activeConnection, async (conn) => {
-  if (conn) {
-    const res = await databaseApi.getDatabases(conn.id)
-    databases.value = res.data || []
-  } else {
-    databases.value = []
-  }
-}, { immediate: true })
+watch(
+  () => connectionStore.activeConnection,
+  async (conn) => {
+    if (conn) {
+      const res = await databaseApi.getDatabases(conn.id)
+      databases.value = res.data || []
+    } else {
+      databases.value = []
+    }
+  },
+  { immediate: true }
+)
+
+// 监听当前数据库变化，加载该库下的表列表（给 SQL 编辑器做表名补全）
+watch(
+  () => workspaceStore.currentDatabase,
+  async (db) => {
+    if (!db || !connectionStore.activeConnection) return
+    try {
+      await databaseStore.fetchTables(connectionStore.activeConnection.id, db)
+    } catch (_) {
+      /* 忽略 */
+    }
+  },
+  { immediate: !!workspaceStore.currentDatabase }
+)
 
 function handleDatabaseChange(db: string) {
   workspaceStore.setCurrentDatabase(db)
@@ -78,6 +103,13 @@ function handleDatabaseChange(db: string) {
 async function handleSelectTable(database: string, table: string) {
   workspaceStore.setCurrentDatabase(database)
   await databaseStore.fetchColumns(connectionStore.activeConnection!.id, database, table)
+  // 把已拉取到的字段缓存下来，供 SQL 编辑器做字段补全
+  if (databaseStore.columns?.length) {
+    columnsByTable.value = {
+      ...columnsByTable.value,
+      [table]: [...databaseStore.columns] as IColumn[],
+    }
+  }
 }
 
 function handleCheckedTablesChange(tables: { database: string; table: string; comment: string }[]) {

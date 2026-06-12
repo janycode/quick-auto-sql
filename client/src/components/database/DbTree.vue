@@ -280,24 +280,10 @@ onMounted(async () => {
   await loadDatabases()
   await nextTick()
   hideNonTableCheckboxes()
-  // 如果有持久化的展开节点，尝试对每个数据库节点进行展开以加载子节点
-  const savedKeys = workspaceStore.expandedKeys
-  if (savedKeys.length > 0) {
-    // 对每个保存的数据库 key 进行展开（会触发 lazy load）
-    for (const key of savedKeys) {
-      if (key.startsWith('db_')) {
-        const node = treeRef.value?.getNode(key)
-        if (node) {
-          treeRef.value?.setCurrentKey(key, false) // 仅为触发加载逻辑
-          treeRef.value?.setExpandedKeys([...treeRef.value.getExpandedKeys(), key])
-        }
-      }
-    }
-    // 稍微延迟一下，等节点加载后恢复勾选状态
-    setTimeout(() => {
-      restoreCheckedKeys()
-    }, 200)
-  }
+  // 稍微延迟一下，恢复勾选状态
+  setTimeout(() => {
+    restoreCheckedKeys()
+  }, 200)
 })
 
 // 恢复保存的勾选状态

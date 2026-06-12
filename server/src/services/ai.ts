@@ -231,6 +231,118 @@ export async function generateSqlStream(
   onMessage({ type: 'done', content: '' });
 }
 
+// ==================== SQL 优化（EXPLAIN + AI → 流式输出优化后 SQL） ====================
+
+function buildOptimizePrompt(sql: string, explainRows: Record<string, unknown>[], schema: string | null): string {
+  const explainText = explainRows.length
+    ? explainRows.map((r) => JSON.stringify(r)).join('\n')
+    : '（EXPLAIN 未返回结果）';
+  const template = getPromptTemplate('optimize_sql');
+  return template.prompt
+    .replace(/\$\{sql\}/g, sql)
+    .replace(/\$\{explain\}/g, explainText)
+    .replace(/\$\{schema\}/g, schema || '（调用方未提供表结构信息）');
+}
+
+export async function optimizeSqlStream(
+  request: { connectionId: string; database: string; sql: string; tables?: string[] },
+  onMessage: (msg: ISseMessage) => void
+): Promise<void> {
+  const aiConfig = getActiveAiConfig();
+  if (!aiConfig || !aiConfig.apiKey) {
+    throw new Error('请先在 AI 配置中添加并激活配置');
+  }
+
+  const trimmedSql = String(request.sql || '').trim();
+  if (!trimmedSql) {
+    throw new Error('SQL 不能为空');
+  }
+
+  // 1. 先跑 EXPLAIN
+  onMessage({ type: 'thinking', content: '正在执行 EXPLAIN 分析执行计划...' });
+  const explainRows = await explainQuery(request.connectionId, request.database, trimmedSql);
+
+  // 2. 如果提供了表名，则获取表结构信息
+  let schema: string | null = null;
+  if (request.tables && request.tables.length > 0) {
+    try {
+      schema = await getTablesSchemaForAI(request.connectionId, request.database, request.tables);
+    } catch {
+      schema = null;
+    }
+  }
+
+  // 3. 构造 prompt 并流式输出
+  const prompt = buildOptimizePrompt(trimmedSql, explainRows, schema);
+  onMessage({ type: 'thinking', content: '正在根据 EXPLAIN 结果生成优化 SQL...' });
+
+  const response = await fetch(aiConfig.apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${aiConfig.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: aiConfig.model,
+      messages: [
+        { role: 'system', content: '你是资深的 MySQL 性能优化专家，只输出可执行的 SQL 语句，不输出任何解释、Markdown 或代码块。' },
+        { role: 'user', content: prompt },
+      ],
+      stream: true,
+      temperature: 0.2,
+      max_tokens: 2000,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`AI API 调用失败: ${response.status} ${errorText}`);
+  }
+
+  const reader = response.body;
+  if (!reader) throw new Error('AI API 响应为空');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const processStream = async () => {
+    const readerObj = reader.getReader();
+    try {
+      while (true) {
+        const { done, value } = await readerObj.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') return;
+
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              onMessage({ type: 'sql', content });
+            }
+          } catch {
+            // 忽略解析错误
+          }
+        }
+      }
+    } finally {
+      readerObj.releaseLock();
+    }
+  };
+
+  await processStream();
+  onMessage({ type: 'done', content: '' });
+}
+
 // ==================== AI 历史对话 ====================
 
 // 获取全部历史（按时间倒序）

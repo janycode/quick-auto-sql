@@ -7,6 +7,7 @@ const KEY_SQL = STORAGE_PREFIX + 'sql'
 const KEY_RESULT = STORAGE_PREFIX + 'query-result'
 const KEY_AI_QUESTION = STORAGE_PREFIX + 'ai-question'
 const KEY_AI_SQL = STORAGE_PREFIX + 'ai-generated-sql'
+const KEY_AI_OPTIMIZED_SQL = STORAGE_PREFIX + 'ai-optimized-sql'
 const KEY_CHECKED_TABLES = STORAGE_PREFIX + 'checked-tables'
 const KEY_EXPANDED_KEYS = STORAGE_PREFIX + 'expanded-keys'
 const KEY_CURRENT_DB = STORAGE_PREFIX + 'current-database'
@@ -36,6 +37,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const aiQuestion = ref(localStorage.getItem(KEY_AI_QUESTION) || '')
   // AI 面板：生成的 SQL
   const aiGeneratedSql = ref(localStorage.getItem(KEY_AI_SQL) || '')
+  // AI 面板：优化后的 SQL
+  const aiOptimizedSql = ref(localStorage.getItem(KEY_AI_OPTIMIZED_SQL) || '')
   // AI 面板：勾选的表（完整数据，用于 AI 提示）
   const checkedTables = ref<ICheckedTable[]>(safeParse<ICheckedTable[]>(localStorage.getItem(KEY_CHECKED_TABLES), []))
   // 树节点 key 列表（用于恢复勾选状态）
@@ -55,6 +58,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }, { deep: true })
   watch(aiQuestion, v => localStorage.setItem(KEY_AI_QUESTION, v))
   watch(aiGeneratedSql, v => localStorage.setItem(KEY_AI_SQL, v))
+  watch(aiOptimizedSql, v => localStorage.setItem(KEY_AI_OPTIMIZED_SQL, v))
   watch(checkedTables, v => localStorage.setItem(KEY_CHECKED_TABLES, JSON.stringify(v)), { deep: true })
   watch(checkedTableKeys, v => localStorage.setItem(KEY_CHECKED_TABLES + '-keys', JSON.stringify(v)), { deep: true })
   watch(expandedKeys, v => localStorage.setItem(KEY_EXPANDED_KEYS, JSON.stringify(v)), { deep: true })
@@ -95,6 +99,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     aiGeneratedSql.value = v
   }
 
+  // 设置 AI 优化后的 SQL
+  function setAiOptimizedSql(v: string) {
+    aiOptimizedSql.value = v
+  }
+
   // 设置 AI 问题
   function setAiQuestion(v: string) {
     aiQuestion.value = v
@@ -127,6 +136,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     queryResult,
     aiQuestion,
     aiGeneratedSql,
+    aiOptimizedSql,
     checkedTables,
     checkedTableKeys,
     expandedKeys,
@@ -135,6 +145,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     clearQueryResult,
     setSql,
     setAiGeneratedSql,
+    setAiOptimizedSql,
     setAiQuestion,
     setCheckedTables,
     clearCheckedTables,

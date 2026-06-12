@@ -60,6 +60,36 @@ html, body, #app {
   overflow: hidden;
 }
 
+.app-layout .app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 16px;
+  background: #fafafa;
+  border-top: 1px solid #e4e7ed;
+  font-size: 11px;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.app-layout .app-footer .footer-motto {
+  color: #909399;
+}
+
+.app-layout .app-footer .footer-copyright {
+  color: #909399;
+}
+
+.app-layout .app-footer .footer-copyright a {
+  color: #909399;
+  text-decoration: none;
+}
+
+.app-layout .app-footer .footer-copyright a:hover {
+  color: #409eff;
+  text-decoration: underline;
+}
+
 .app-sidebar {
   width: 280px;
   background: #fafafa;

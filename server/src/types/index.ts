@@ -123,7 +123,7 @@ export interface IAiProvider {
 }
 
 // 提示词模板类型
-export type IPromptTemplateType = 'generate_sql' | 'analyze_sql' | 'explain_sql';
+export type IPromptTemplateType = 'generate_sql' | 'analyze_sql' | 'explain_sql' | 'optimize_sql';
 
 // 提示词模板
 export interface IPromptTemplate {
