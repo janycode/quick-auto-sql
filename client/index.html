@@ -6,7 +6,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- 提前声明 JetBrains Mono 的 font-display，字体加载期间页面先不渲染该字体字形，
+         避免 Monaco 初始化时测量到回退字体的宽度，产生光标/选区错位 -->
+    <style>
+      @font-face {
+        font-family: 'JetBrains Mono';
+        font-display: block;
+      }
+    </style>
     <title>Quick Auto SQL</title>
   </head>
   <body>

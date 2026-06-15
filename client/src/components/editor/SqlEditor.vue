@@ -1266,14 +1266,42 @@ onMounted(() => {
       theme: 'vs',
       minimap: { enabled: false },
       fontSize: 14,
-      fontFamily: "'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace",
+      fontFamily: "'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace",
       fontLigatures: false,
+      fontVariations: false,
       lineNumbers: 'on',
       automaticLayout: true,
       wordWrap: 'on',
       scrollBeyondLastLine: false,
       folding: true,
       tabSize: 2,
+    })
+
+    // --- 字体宽度测量修正 ---
+    // JetBrains Mono 是按需/异步加载的（Google Fonts / 首次加载期间），
+    // Monaco 在初始化时可能先测量到回退字体的字符宽度，
+    // 字体真正加载完成后需要手动调用 remeasureFonts 让它重新测量，
+    // 否则会出现"光标/选中位置落后 1~2 个字符"的视觉错位。
+    function remeasureIfNeeded() {
+      try {
+        monaco.editor.remeasureFonts()
+      } catch (e) {
+        // 忽略 —— 老版本 Monaco 可能没有这个 API
+      }
+    }
+    // 文档字体就绪后立即刷新一次
+    if (typeof document !== 'undefined' && 'fonts' in document && document.fonts && typeof (document.fonts as any).ready?.then === 'function') {
+      ;(document.fonts as any).ready.then(() => {
+        remeasureIfNeeded()
+        editor?.layout()
+      }).catch(() => { /* ignore */ })
+    }
+    // 额外兜底：1 秒、3 秒后再各刷一次（覆盖字体中途切换、网络较慢等场景）
+    const timers: number[] = []
+    timers.push(window.setTimeout(remeasureIfNeeded, 1000))
+    timers.push(window.setTimeout(remeasureIfNeeded, 3000))
+    onBeforeUnmount(() => {
+      timers.forEach((t) => window.clearTimeout(t))
     })
 
     // 注册 SQL 关键字/表/字段 IntelliSense 补全
@@ -1555,6 +1583,25 @@ defineExpose({ setSql })
     flex: 1 1 0;
     min-height: 0;
     overflow: hidden;
+    /* 禁用连字/合字/字距调整，保证字符宽度与列数严格对应，
+       避免光标/选区/删除/粘贴错位
+    */
+    :deep(.monaco-editor),
+    :deep(.monaco-editor-background),
+    :deep(.monaco-mouse-cursor-text),
+    :deep(.view-overlays),
+    :deep(.view-lines),
+    :deep(.margin),
+    :deep(.view-line),
+    :deep(.cursor-layer),
+    :deep(.cursor) {
+      font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace !important;
+      font-variant-ligatures: none !important;
+      font-feature-settings: "liga" 0, "calt" 0, "dlig" 0, "clig" 0 !important;
+      font-kerning: none !important;
+      letter-spacing: 0 !important;
+      font-variation-settings: normal !important;
+    }
   }
 }
 
@@ -1570,7 +1617,7 @@ defineExpose({ setSql })
 }
 
 .history-sql {
-  font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
+  font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   font-size: 12.5px;
   color: #303133;
   display: block;
@@ -1584,7 +1631,7 @@ defineExpose({ setSql })
   border: 1px solid #ebeef5;
   border-radius: 6px;
   padding: 10px 12px;
-  font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
+  font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   font-size: 12.5px;
   color: #303133;
   line-height: 1.7;
@@ -1651,7 +1698,7 @@ defineExpose({ setSql })
     font-weight: 500;
     color: #303133;
     min-height: 22px;
-    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
 
   .step-dots {
@@ -1682,14 +1729,14 @@ defineExpose({ setSql })
   .loading-progress-text {
     font-size: 12px;
     color: #909399;
-    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
 
   .loading-hint {
     margin-top: 4px;
     font-size: 12px;
     color: #c0c4cc;
-    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
 }
 
@@ -1730,7 +1777,7 @@ defineExpose({ setSql })
     background: #f7f8fa;
     border: 1px solid #ebeef5;
     border-radius: 6px;
-    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
+    font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
     font-size: 13px;
     line-height: 1.8;
     color: #303133;
@@ -1746,7 +1793,7 @@ defineExpose({ setSql })
       padding: 10px 12px;
       margin: 6px 0;
       color: #24292f;
-      font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', Menlo, Monaco, 'Courier New', monospace;
+      font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
       font-size: 12.5px;
       line-height: 1.7;
       overflow-x: auto;
@@ -1763,7 +1810,7 @@ defineExpose({ setSql })
       color: #0969da;
       padding: 1px 6px;
       border-radius: 4px;
-      font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', monospace;
+      font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
       margin: 0 2px;
     }
 
@@ -1838,7 +1885,7 @@ defineExpose({ setSql })
   .legend-item {
     padding: 2px 8px;
     border-radius: 999px;
-    font-family: 'JetBrains Mono', Consolas, 'Microsoft YaHei', '微软雅黑', monospace;
+    font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
     font-size: 11px;
     line-height: 1.6;
 
