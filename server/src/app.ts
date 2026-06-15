@@ -34,9 +34,9 @@ app.get('/api/health', (_req, res) => {
 // 错误处理
 app.use(errorHandler);
 
-// 启动服务
-app.listen(config.port, () => {
-  console.log(`[Quick Auto SQL] 服务已启动: http://localhost:${config.port}`);
+// 启动服务（绑定到 0.0.0.0，确保 Docker 端口映射可转发流量）
+app.listen(config.port, '0.0.0.0', () => {
+  console.log(`[Quick Auto SQL] 服务已启动: http://0.0.0.0:${config.port}`);
 });
 
 export default app;

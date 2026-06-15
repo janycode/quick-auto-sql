@@ -44,10 +44,29 @@ pnpm preview       # 预览生产构建
 ```
 
 ### 开发环境启动
-1. 先启动后端：`cd server && npm run dev`
-2. 再启动前端：`cd client && pnpm dev`
+1. 先启动后端：`cd server && npm run dev`（http://localhost:3000）
+2. 再启动前端：`cd client && pnpm dev`（http://localhost:5173）
 3. 打开 http://localhost:5173
 4. 在 `设置 / AI 配置` 页面添加并激活一个 AI 配置（API Key + 模型）
+
+### Docker 部署（生产环境 · 端口 13305 / 13306）
+```bash
+# 后端（监听 13305，数据目录挂载到宿主机）
+cd server
+chmod +x docker.sh
+./docker.sh
+
+# 前端（监听 13306，内部通过 Nginx 代理 /api 到 quick-auto-sql-server:13305）
+cd ../client
+chmod +x docker.sh
+./docker.sh
+```
+
+部署后访问：
+- 前端：http://192.168.33.180:13306
+- 后端健康检查：http://192.168.33.180:13305/api/health
+
+> 前端容器内通过 `--add-host quick-auto-sql-server:192.168.33.180` 解析到后端，故 `/api/**` 请求会被 Nginx 反代到后端 `13305` 端口。
 
 ## 架构设计
 
@@ -179,4 +198,5 @@ DEEPSEEK_MODEL=deepseek-chat
 
 ## Vite 代理
 
-`client/vite.config.ts` 将 `/api/**` 代理到 `http://localhost:3000`（changeOrigin: true）。
+- **开发环境**：`client/vite.config.ts` 将 `/api/**` 代理到 `http://localhost:3000`（changeOrigin: true）。
+- **Docker 部署**：`client/nginx.conf` 将 `/api/**` 代理到 `http://quick-auto-sql-server:13305/api/`（SSE 流式输出已关闭缓冲），`--add-host quick-auto-sql-server:192.168.33.180` 负责把主机名解析到宿主机 IP。

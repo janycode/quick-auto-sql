@@ -78,7 +78,7 @@ quick-auto-sql/
 - pnpm（前端）/ npm（后端）
 - MySQL 数据库实例（用于查询功能）
 
-### 启动后端
+### 启动后端（开发环境 · 端口 3000）
 
 ```bash
 cd server
@@ -97,7 +97,7 @@ DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
-### 启动前端
+### 启动前端（开发环境 · 端口 5173）
 
 ```bash
 cd client
@@ -111,6 +111,56 @@ pnpm dev
 ### 健康检查
 
 后端启动后可访问 `GET http://localhost:3000/api/health` 验证服务状态。
+
+## 🐳 Docker 部署（生产环境 · 端口 13305 / 13306）
+
+为虚拟机（CentOS）提供一键部署脚本，前后端分两个容器运行。
+
+### 架构
+
+| 组件 | 容器名 | 宿主机端口 | 容器内端口 |
+|------|--------|-----------|-----------|
+| 后端服务 | `quick-auto-sql-server` | **13305** | 13305 |
+| 前端应用 | `quick-auto-sql-client` | **13306** | 13306 |
+
+前端容器内的 Nginx 会把 `/api/*` 请求反向代理到后端 `quick-auto-sql-server:13305`。
+
+### 部署步骤
+
+```bash
+# 1. 部署后端
+cd server
+chmod +x docker.sh
+./docker.sh
+
+# 2. 部署前端
+cd ../client
+chmod +x docker.sh
+./docker.sh
+```
+
+部署成功后：
+- 前端访问：`http://192.168.33.180:13306`
+- 后端健康检查：`http://192.168.33.180:13305/api/health`
+
+### 数据持久化
+
+后端容器会挂载 `server/data/` 目录到容器内的 `/app/data`，连接配置、AI 配置、对话历史、提示词模板等 JSON 文件会持久化到宿主机，容器重启或重新构建不会丢失。
+
+### 自定义环境变量（可选）
+
+如需自定义 `ENCRYPT_KEY`、`DEEPSEEK_API_KEY` 等，编辑 `server/docker.sh` 中的 `docker run` 命令，追加 `-e` 参数：
+
+```bash
+docker run -d \
+  --name "quick-auto-sql-server" \
+  -p 13305:13305 \
+  -e ENCRYPT_KEY=your-encrypt-key \
+  -e DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions \
+  -v "$(pwd)/data:/app/data" \
+  --restart unless-stopped \
+  quick-auto-sql-server:latest
+```
 
 ## 📖 使用流程
 
