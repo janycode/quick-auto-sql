@@ -87,15 +87,42 @@ npm run dev
 # 服务启动在 http://localhost:3000
 ```
 
-可选：在 `server/.env` 中自定义以下配置（均有默认值）：
+可选：在 `server/.env` 中自定义以下配置（均有默认值，敏感值已脱敏，实际部署请替换为真实值）：
 
-```
+```dotenv
+# ==================== 服务 ====================
+# 后端服务监听端口
 PORT=3000
-ENCRYPT_KEY=your-encrypt-key
+
+# ==================== 加密 ====================
+# 数据库连接密码 AES 加密密钥（请替换为随机字符串，至少 16 位）
+ENCRYPT_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# ==================== 数据目录 ====================
+# JSON 配置与历史数据存放目录（相对/绝对路径均可）
 DATA_DIR=./data
+
+# ==================== AI · 默认 DeepSeek ====================
+# 默认 chat completions 地址（也可在前端的 AI 配置中新增多套配置覆盖）
 DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
+# 默认模型
 DEEPSEEK_MODEL=deepseek-chat
+
+# ==================== SMTP · 邮件（可选） ====================
+# 未配置时系统运行在 EMAIL_DEV_MODE=true：邮件内容仅打印到控制台，不会真实发送
+SMTP_HOST=smtp.example.com
+SMTP_PORT=465
+# 是否启用 TLS：true / false（留空自动按端口推断）
+SMTP_SECURE=true
+SMTP_USER=your-smtp-username
+SMTP_PASS=your-smtp-password-or-api-key
+# 发件人显示名与地址
+SMTP_FROM="Quick Auto SQL <no-reply@example.com>"
+# 开发模式（true=只打印不发送；false=真实发送）
+EMAIL_DEV_MODE=true
 ```
+
+> 所有 `xxx_KEY / xxx_PASS / xxx_USER` 等敏感字段默认均有兜底空值或 `default-key` 占位，生产部署请务必替换为真实值并将 `server/.env` 加入 `.gitignore`。
 
 ### 启动前端（开发环境 · 端口 5173）
 
