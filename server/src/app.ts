@@ -2,10 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
+import { requireAuth } from './middleware/auth';
 import connectionRouter from './routes/connection';
 import databaseRouter from './routes/database';
 import queryRouter from './routes/query';
 import aiRouter from './routes/ai';
+import authRouter from './routes/auth';
 
 const app = express();
 
@@ -20,16 +22,17 @@ app.use((req, _res, next) => {
   next();
 });
 
-// 路由
-app.use('/api/connections', connectionRouter);
-app.use('/api/databases', databaseRouter);
-app.use('/api/query', queryRouter);
-app.use('/api/ai', aiRouter);
-
-// 健康检查
+// 登录相关 & 健康检查 不需要鉴权
+app.use('/api/auth', authRouter);
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// 业务路由：必须登录
+app.use('/api/connections', requireAuth, connectionRouter);
+app.use('/api/databases', requireAuth, databaseRouter);
+app.use('/api/query', requireAuth, queryRouter);
+app.use('/api/ai', requireAuth, aiRouter);
 
 // 错误处理
 app.use(errorHandler);

@@ -1,9 +1,45 @@
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+const TOKEN_STORAGE_KEY = 'quick-auto-sql-token'
+
+export const authToken = {
+  get(): string | null {
+    try {
+      return localStorage.getItem(TOKEN_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  },
+  set(token: string): void {
+    try {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token)
+    } catch {
+      /* ignore */
+    }
+  },
+  clear(): void {
+    try {
+      localStorage.removeItem(TOKEN_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+  },
+}
+
 const request = axios.create({
   baseURL: '/api',
   timeout: 30000,
+})
+
+// 请求拦截：把 token 注入到 Authorization 头
+request.interceptors.request.use((config) => {
+  const token = authToken.get()
+  if (token) {
+    config.headers = { ...(config.headers || {}) }
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
+  return config
 })
 
 // 扩展 AxiosRequestConfig 以支持 _silentError 属性
@@ -129,10 +165,49 @@ function showMysqlUnavailableDialog() {
     })
 }
 
+function handleUnauthorizedIfNeeded(response: { status?: number; data?: any }, silent?: boolean) {
+  const status = response?.status
+  const code = response?.data?.code
+  const isUnauthorized = status === 401 || code === 401
+  if (isUnauthorized) {
+    authToken.clear()
+    // 避免多个并发请求同时弹出提示和重复跳转
+    const flagKey = '_quick_auto_sql_logging_out'
+    if (!(window as any)[flagKey]) {
+      ;(window as any)[flagKey] = true
+      if (!silent) {
+        ElMessageBox.alert('未登录或会话已失效，请重新登录', '登录状态', {
+          confirmButtonText: '去登录',
+          type: 'warning',
+          showClose: false,
+        })
+          .catch(() => {})
+          .finally(() => {
+            ;(window as any)[flagKey] = false
+            if (location.pathname !== '/login') {
+              location.href = '/login'
+            }
+          })
+      } else {
+        ;(window as any)[flagKey] = false
+        if (location.pathname !== '/login') {
+          location.href = '/login'
+        }
+      }
+    }
+    return true
+  }
+  return false
+}
+
 request.interceptors.response.use(
   (response) => {
     const { data, config } = response
     if (data && data.code !== 0) {
+      // 未登录优先处理
+      if (handleUnauthorizedIfNeeded({ status: response.status, data }, config._silentError)) {
+        return Promise.reject(new Error(data.message || '未登录'))
+      }
       // MySQL 不可用：优先弹蒙版提示，不再使用普通 ElMessage
       if (data.code === MYSQL_UNAVAILABLE_CODE && shouldTriggerMysqlUnavailableDialog(config)) {
         showMysqlUnavailableDialog()
@@ -147,6 +222,10 @@ request.interceptors.response.use(
     return data
   },
   (error) => {
+    // 401 等状态码错误走这里
+    if (handleUnauthorizedIfNeeded({ status: error.response?.status, data: error.response?.data }, error.config?._silentError)) {
+      return Promise.reject(error)
+    }
     const data = error.response?.data
     const rawMessage = data?.message || error.message || '网络错误'
 

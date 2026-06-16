@@ -25,6 +25,7 @@
           AI 配置
         </el-button>
         <el-button
+          v-if="isAdmin"
           :type="isPromptSettings ? 'primary' : 'default'"
           :link="!isPromptSettings"
           size="small"
@@ -33,6 +34,22 @@
           <el-icon><Edit /></el-icon>
           提示词配置
         </el-button>
+        <el-dropdown trigger="click" @command="onDropdownCommand" class="user-dropdown">
+          <div class="user-info">
+            <el-avatar :size="30" :icon="User" />
+            <span class="username">{{ username || '未登录' }}</span>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item disabled>
+                <el-icon><User /></el-icon>{{ username || '未登录' }}
+              </el-dropdown-item>
+              <el-dropdown-item divided command="logout">
+                <el-icon><SwitchButton /></el-icon>退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
     <div class="app-body">
@@ -50,10 +67,60 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { User, SwitchButton } from '@element-plus/icons-vue'
+import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
+const router = useRouter()
+const userStore = useUserStore()
+
 const isWorkspace = computed(() => route.path === '/workspace')
 const isAiSettings = computed(() => route.path === '/settings/ai')
 const isPromptSettings = computed(() => route.path === '/settings/prompts')
+const username = computed(() => userStore.username)
+const isAdmin = computed(() => userStore.isAdmin)
+
+async function onDropdownCommand(cmd: string) {
+  if (cmd === 'logout') {
+    try {
+      await ElMessageBox.confirm('确定要退出登录吗？', '退出登录', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+      await userStore.logout()
+      ElMessage.success('已退出登录')
+      router.replace('/')
+    } catch {
+      /* 取消 */
+    }
+  }
+}
 </script>
+
+<style scoped lang="scss">
+.user-dropdown {
+  margin-left: 8px;
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.04);
+    }
+
+    .username {
+      font-size: 13px;
+      color: #3a4566;
+    }
+  }
+}
+</style>

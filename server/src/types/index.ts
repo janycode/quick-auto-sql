@@ -131,3 +131,34 @@ export interface IPromptTemplate {
   prompt: string;
   updatedAt: string;
 }
+
+// ==================== 用户登录 ====================
+export interface IUser {
+  id: string;
+  username: string;
+  passwordHash: string;
+  createdAt: string;
+}
+
+export interface IUserStoreData {
+  users: IUser[];
+}
+
+export interface ILoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface ILoginResult {
+  token: string;
+  username: string;
+  userId: string;
+}
+
+export interface IAuthSession {
+  token: string;
+  userId: string;
+  username: string;
+  createdAt: string;
+  expiresAt: string;
+}

@@ -1,7 +1,20 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler, success, fail } from '../middleware/async-handler';
+import { AuthRequest, requireAuth } from '../middleware/auth';
 import * as aiService from '../services/ai';
 import { ISseMessage, IPromptTemplateType } from '../types';
+
+function requireAdmin(req: AuthRequest, res: Response, next: () => void): void {
+  if (!req.auth) {
+    res.status(401).json({ code: 401, message: '未登录或会话已失效', data: null });
+    return;
+  }
+  if ((req.auth.username || '').toLowerCase() !== 'admin') {
+    res.status(403).json({ code: 403, message: '无权限，仅管理员可操作', data: null });
+    return;
+  }
+  next();
+}
 
 const router = Router();
 
@@ -169,16 +182,17 @@ router.post('/optimize', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // ==================== 提示词模板管理 ====================
+// 注意：所有提示词接口均仅 admin 可访问
 
 // 获取所有提示词模板
-router.get('/prompts', asyncHandler(async (_req: Request, res: Response) => {
+router.get('/prompts', requireAuth, requireAdmin, asyncHandler(async (_req: AuthRequest, res: Response) => {
   success(res, aiService.listPromptTemplates());
 }));
 
 // 获取单个提示词模板
-router.get('/prompts/:type', asyncHandler(async (req: Request, res: Response) => {
+router.get('/prompts/:type', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res: Response) => {
   const type = req.params.type as IPromptTemplateType;
-  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql' && type !== 'optimize_sql') {
     fail(res, '非法的提示词类型');
     return;
   }
@@ -186,10 +200,10 @@ router.get('/prompts/:type', asyncHandler(async (req: Request, res: Response) =>
 }));
 
 // 更新提示词模板（不允许清空）
-router.put('/prompts/:type', asyncHandler(async (req: Request, res: Response) => {
+router.put('/prompts/:type', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res: Response) => {
   const type = req.params.type as IPromptTemplateType;
   const { prompt } = req.body || {};
-  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql' && type !== 'optimize_sql') {
     fail(res, '非法的提示词类型');
     return;
   }
@@ -206,9 +220,9 @@ router.put('/prompts/:type', asyncHandler(async (req: Request, res: Response) =>
 }));
 
 // 重置为默认提示词
-router.post('/prompts/:type/reset', asyncHandler(async (req: Request, res: Response) => {
+router.post('/prompts/:type/reset', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res: Response) => {
   const type = req.params.type as IPromptTemplateType;
-  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql') {
+  if (type !== 'generate_sql' && type !== 'analyze_sql' && type !== 'explain_sql' && type !== 'optimize_sql') {
     fail(res, '非法的提示词类型');
     return;
   }

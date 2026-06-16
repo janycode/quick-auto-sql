@@ -24,7 +24,8 @@ html, body, #app {
 .app-layout {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-layout .app-header {
@@ -57,7 +58,7 @@ html, body, #app {
 .app-layout .app-body {
   display: flex;
   flex: 1;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .app-layout .app-footer {
