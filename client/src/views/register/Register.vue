@@ -35,25 +35,33 @@
         size="large"
         @keyup.enter="onSubmit"
       >
-        <el-form-item label="用户名" prop="username">
+        <el-form-item label="邮箱" prop="email">
           <el-input
-            v-model="form.username"
-            placeholder="3~32 个字符，登录用"
+            v-model="form.email"
+            placeholder="请输入邮箱"
             clearable
-            :prefix-icon="User"
-            autocomplete="username"
+            :prefix-icon="Message"
+            autocomplete="email"
           />
         </el-form-item>
+
         <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="6~128 个字符"
-            show-password
-            :prefix-icon="Lock"
-            autocomplete="new-password"
-          />
+          <el-tooltip
+            placement="top"
+            content="至少 8 位，需包含英文字母和数字或特殊符号"
+            :show-after="300"
+          >
+            <el-input
+              v-model="form.password"
+              type="password"
+              placeholder="至少 8 位，字母 + 数字/符号"
+              show-password
+              :prefix-icon="Lock"
+              autocomplete="new-password"
+            />
+          </el-tooltip>
         </el-form-item>
+
         <el-form-item label="确认密码" prop="confirmPassword">
           <el-input
             v-model="form.confirmPassword"
@@ -64,6 +72,39 @@
             autocomplete="new-password"
           />
         </el-form-item>
+
+        <el-form-item label="邮箱验证码" prop="code">
+          <div class="code-row">
+            <el-input
+              v-model="form.code"
+              placeholder="6 位数字验证码"
+              :prefix-icon="Key"
+              maxlength="6"
+              inputmode="numeric"
+            />
+            <el-button
+              :disabled="codeSending || countdown > 0 || !isEmailValid"
+              :loading="codeSending"
+              class="code-btn"
+              @click="onSendCode"
+            >
+              {{ countdown > 0 ? `${countdown}s 后重试` : '获取验证码' }}
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <el-alert
+          v-if="previewUrl"
+          title="邮件预览链接（测试账号模式）"
+          type="info"
+          :closable="false"
+          show-icon
+        >
+          <template #default>
+            验证码已真实发送，请点击下方链接在新窗口查看：
+            <a :href="previewUrl" target="_blank" rel="noopener">{{ previewUrl }}</a>
+          </template>
+        </el-alert>
 
         <el-form-item>
           <el-button
@@ -90,49 +131,114 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed } from 'vue'
+import { reactive, ref, computed, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { User, Lock } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type FormItemRule } from 'element-plus'
+import { Message, Lock, Key } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
+import { sendEmailCode } from '@/api/auth'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const codeSending = ref(false)
+const countdown = ref(0)
+const previewUrl = ref<string | null>(null)
+let countdownTimer: number | null = null
 
 const form = reactive({
-  username: '',
+  email: '',
   password: '',
   confirmPassword: '',
+  code: '',
 })
 
+const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+
+const isEmailValid = computed(() => emailRegex.test(form.email.trim()))
+
+const validatePassword: FormItemRule['validator'] = (_rule, value, callback) => {
+  const v = value as string | undefined
+  if (!v) return callback(new Error('请输入密码'))
+  if (v.length < 8) return callback(new Error('密码长度至少 8 位'))
+  if (v.length > 128) return callback(new Error('密码长度不能超过 128 位'))
+  if (!/[A-Za-z]/.test(v)) return callback(new Error('密码必须包含英文字母'))
+  if (!/[0-9]/.test(v) && !/[^A-Za-z0-9]/.test(v)) {
+    return callback(new Error('密码必须包含至少一个数字或特殊符号'))
+  }
+  return callback()
+}
+
 const rules: FormRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 32, message: '用户名长度需在 3~32 个字符之间', trigger: 'blur' },
+  email: [
+    { required: true, message: '请输入邮箱', trigger: 'blur' },
+    { pattern: emailRegex, message: '邮箱格式不正确', trigger: 'blur' },
   ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 128, message: '密码长度需在 6~128 个字符之间', trigger: 'blur' },
-  ],
+  password: [{ validator: validatePassword, trigger: 'blur' }],
   confirmPassword: [
-    { required: true, message: '请再次输入密码', trigger: 'blur' },
     {
       validator: (_rule, value, callback) => {
-        if (value !== form.password) {
-          callback(new Error('两次输入的密码不一致'))
-        } else {
-          callback()
-        }
+        if (!value) return callback(new Error('请再次输入密码'))
+        if (value !== form.password) return callback(new Error('两次输入的密码不一致'))
+        return callback()
       },
       trigger: 'blur',
     },
   ],
+  code: [
+    { required: true, message: '请输入验证码', trigger: 'blur' },
+    { pattern: /^\d{6}$/, message: '验证码为 6 位数字', trigger: 'blur' },
+  ],
 }
 
 const year = computed(() => new Date().getFullYear())
+
+function startCountdown(seconds = 60) {
+  stopCountdown()
+  countdown.value = seconds
+  countdownTimer = window.setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) {
+      stopCountdown()
+    }
+  }, 1000)
+}
+
+function stopCountdown() {
+  if (countdownTimer !== null) {
+    window.clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  countdown.value = 0
+}
+
+async function onSendCode() {
+  if (!isEmailValid.value) {
+    ElMessage.warning('请先输入正确的邮箱')
+    return
+  }
+  codeSending.value = true
+  previewUrl.value = null
+  try {
+    const result = await sendEmailCode({ email: form.email.trim() })
+
+    // Ethereal 测试账号模式（SMTP_HOST=test）：展示预览链接，便于本地演示
+    if (result?.data?.previewUrl) {
+      previewUrl.value = result.data.previewUrl
+      ElMessage.success('验证码已发送，请查看下方链接中的邮件获取验证码')
+    } else {
+      // 真实生产环境：邮件已发出
+      ElMessage.success('验证码已发送，请注意查收邮件（可能在垃圾邮件文件夹）')
+    }
+    startCountdown(60)
+  } catch (err: any) {
+    console.warn('send code failed', err)
+  } finally {
+    codeSending.value = false
+  }
+}
 
 async function onSubmit() {
   if (!formRef.value) return
@@ -143,7 +249,11 @@ async function onSubmit() {
   }
   loading.value = true
   try {
-    await userStore.register({ username: form.username, password: form.password })
+    await userStore.register({
+      email: form.email.trim().toLowerCase(),
+      password: form.password,
+      code: form.code.trim(),
+    })
     ElMessage.success('注册成功，已为你登录')
     router.replace('/workspace')
   } catch (err: any) {
@@ -152,6 +262,10 @@ async function onSubmit() {
     loading.value = false
   }
 }
+
+onBeforeUnmount(() => {
+  stopCountdown()
+})
 </script>
 
 <style scoped lang="scss">
@@ -198,7 +312,7 @@ async function onSubmit() {
 .login-card {
   position: relative;
   z-index: 2;
-  width: 420px;
+  width: 440px;
   max-width: 92vw;
   padding: 40px 40px 24px;
   background: #ffffff;
@@ -212,7 +326,7 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
 }
 
 .logo {
@@ -237,6 +351,21 @@ async function onSubmit() {
   margin-top: 4px;
   font-size: 13px;
   color: #7a8599;
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.code-row :deep(.el-input) {
+  flex: 1;
+}
+
+.code-btn {
+  min-width: 130px;
+  white-space: nowrap;
 }
 
 .submit-btn {

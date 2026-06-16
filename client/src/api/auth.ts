@@ -5,6 +5,12 @@ export interface ILoginRequest {
   password: string
 }
 
+export interface IRegisterRequest {
+  email: string
+  password: string
+  code: string
+}
+
 export interface ILoginResult {
   token: string
   userId: string
@@ -20,8 +26,15 @@ export function login(data: ILoginRequest) {
   return request.post<any, { code: number; data: ILoginResult }>('/auth/login', data)
 }
 
-export function register(data: ILoginRequest) {
+export function register(data: IRegisterRequest) {
   return request.post<any, { code: number; data: ILoginResult }>('/auth/register', data)
+}
+
+export function sendEmailCode(data: { email: string }) {
+  return request.post<any, { code: number; data: { sent: boolean; expiresIn: number; devMode?: boolean } }>(
+    '/auth/email/send-code',
+    data
+  )
 }
 
 export function logout() {

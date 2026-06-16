@@ -29,10 +29,10 @@
         size="large"
         @keyup.enter="onSubmit"
       >
-        <el-form-item label="用户名" prop="username">
+        <el-form-item label="邮箱 / 用户名" prop="username">
           <el-input
             v-model="form.username"
-            placeholder="请输入用户名"
+            placeholder="请输入邮箱或用户名"
             clearable
             :prefix-icon="User"
             autocomplete="username"

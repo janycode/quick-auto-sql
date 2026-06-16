@@ -135,8 +135,10 @@ export interface IPromptTemplate {
 // ==================== 用户登录 ====================
 export interface IUser {
   id: string;
-  username: string;
+  email?: string;          // 新注册用户：邮箱（账号）
+  username?: string;       // 旧用户兼容：保留 username 用于旧数据
   passwordHash: string;
+  emailVerified: boolean;
   createdAt: string;
 }
 
@@ -145,13 +147,23 @@ export interface IUserStoreData {
 }
 
 export interface ILoginRequest {
-  username: string;
+  username: string;   // 兼容：既可以是邮箱，也可以是旧 username
   password: string;
+}
+
+export interface IRegisterRequest {
+  email: string;
+  password: string;
+  code: string;
+}
+
+export interface IEmailCodeRequest {
+  email: string;
 }
 
 export interface ILoginResult {
   token: string;
-  username: string;
+  username: string;   // 实际返回显示用的用户名（email 或旧 username）
   userId: string;
 }
 

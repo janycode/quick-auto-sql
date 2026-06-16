@@ -1,19 +1,117 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler, success, fail } from '../middleware/async-handler';
-import { verifyUser, createSession, revokeSession, findSession, createUser } from '../services/auth';
+import {
+  verifyUser,
+  createSession,
+  revokeSession,
+  findSession,
+  createUser,
+  sendEmailCodeFor,
+  verifyEmailCodeFor,
+  validateEmail,
+  validatePassword,
+} from '../services/auth';
+import { verifySmtpConfig } from '../services/email';
+import { config } from '../config';
 import { AuthRequest, extractToken } from '../middleware/auth';
-import { ILoginRequest } from '../types';
+import type { ILoginRequest, IRegisterRequest, IEmailCodeRequest } from '../types';
 
 const router = Router();
 
-// POST /api/auth/register
+function getReqIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return (req.ip || req.socket?.remoteAddress || 'unknown').trim();
+}
+
+// POST /api/auth/email/send-code —— 发送邮箱验证码
+router.post('/email/send-code', asyncHandler(async (req: Request, res: Response) => {
+  const body = (req.body || {}) as IEmailCodeRequest;
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  if (!validateEmail(email)) {
+    fail(res, '邮箱格式不正确', 400, 400);
+    return;
+  }
+  const result = await sendEmailCodeFor(email, getReqIp(req));
+  if (!result.ok) {
+    fail(res, result.reason || '验证码发送失败', 400, 400);
+    return;
+  }
+  success(res, {
+    sent: true,
+    expiresIn: result.expiresIn,
+    devMode: !!result.devMode,
+    previewUrl: result.previewUrl || null,
+  }, '验证码已发送');
+}));
+
+// POST /api/auth/email/check —— SMTP 自检（打印配置 & 尝试连接发送）
+router.post('/email/check', asyncHandler(async (req: Request, res: Response) => {
+  // 回显配置（不返回密码）
+  const maskedPass = config.smtp.pass ? '****' + (config.smtp.pass.length > 4 ? config.smtp.pass.slice(-4) : '') : '';
+  const configInfo = {
+    host: config.smtp.host,
+    port: config.smtp.port,
+    secure: typeof config.smtp.secure,
+    user: config.smtp.user,
+    pass: maskedPass,
+    from: config.smtp.from,
+    devMode: config.smtp.devMode,
+  };
+  const body = (req.body || {}) as { email?: string };
+  const testEmail = typeof body.email === 'string' && body.email.trim() ? body.email.trim() : null;
+
+  const verify = await verifySmtpConfig();
+
+  let sendInfo: { ok: boolean; reason?: string; response?: string; responseCode?: number; command?: string; previewUrl?: string } = { ok: true };
+  if (testEmail && verify.ok) {
+    const r = await sendEmailCodeFor(testEmail, getReqIp(req));
+    sendInfo = {
+      ok: r.ok,
+      reason: r.reason,
+      response: r.response,
+      responseCode: r.responseCode,
+      command: r.command,
+      previewUrl: r.previewUrl,
+    };
+  }
+
+  success(res, {
+    config: configInfo,
+    verify,
+    testEmail,
+    send: sendInfo,
+  }, verify.ok ? 'SMTP 配置正常' : 'SMTP 连接异常');
+}));
+
+// POST /api/auth/register —— 注册（要求邮箱 + 密码 + 验证码）
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
-  const body = (req.body || {}) as ILoginRequest;
-  const username = typeof body.username === 'string' ? body.username.trim() : '';
+  const body = (req.body || {}) as IRegisterRequest;
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
+  const code = typeof body.code === 'string' ? body.code.trim() : '';
+
+  if (!validateEmail(email)) {
+    fail(res, '邮箱格式不正确', 400, 400);
+    return;
+  }
+
+  const pw = validatePassword(password);
+  if (!pw.ok) {
+    fail(res, pw.reason || '密码不符合要求', 400, 400);
+    return;
+  }
+
+  const verifyResult = verifyEmailCodeFor(email, code);
+  if (!verifyResult.ok) {
+    fail(res, verifyResult.reason || '验证码校验失败', 400, 400);
+    return;
+  }
 
   try {
-    const { user } = createUser(username, password);
+    const { user } = createUser(email, password);
     const session = createSession(user);
     success(res, {
       token: session.token,
@@ -32,13 +130,13 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   const password = typeof body.password === 'string' ? body.password : '';
 
   if (!username || !password) {
-    fail(res, '用户名或密码不能为空', 400, 400);
+    fail(res, '账号或密码不能为空', 400, 400);
     return;
   }
 
   const user = verifyUser(username, password);
   if (!user) {
-    fail(res, '用户名或密码错误', 401, 401);
+    fail(res, '账号或密码错误', 401, 401);
     return;
   }
 

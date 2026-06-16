@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { login as apiLogin, logout as apiLogout, getMe, register as apiRegister } from '@/api/auth'
-import type { ILoginRequest } from '@/api/auth'
+import type { ILoginRequest, IRegisterRequest } from '@/api/auth'
 import { authToken } from '@/utils/request'
 
 interface IUserState {
@@ -69,7 +69,7 @@ export const useUserStore = defineStore('user', {
         saveUserInfo(this.userId, this.username)
       }
     },
-    async register(payload: ILoginRequest): Promise<void> {
+    async register(payload: IRegisterRequest): Promise<void> {
       const result = await apiRegister(payload)
       if (result?.data?.token) {
         authToken.set(result.data.token)
