@@ -141,7 +141,7 @@ router.post('/generate', asyncHandler(async (req: Request, res: Response) => {
 
 // 根据 EXPLAIN 结果优化 SQL（SSE 流式）
 router.post('/optimize', asyncHandler(async (req: Request, res: Response) => {
-  const { connectionId, database, sql, tables } = req.body || {};
+  const { connectionId, database, sql, tables, analysis } = req.body || {};
   if (!connectionId || !database || !sql) {
     fail(res, 'connectionId、database 和 sql 参数必填');
     return;
@@ -158,7 +158,7 @@ router.post('/optimize', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     await aiService.optimizeSqlStream(
-      { connectionId, database, sql, tables: tables || [] },
+      { connectionId, database, sql, tables: tables || [], analysis: analysis || '' },
       sendSse
     );
   } catch (error: any) {
@@ -250,13 +250,34 @@ router.post('/explain', asyncHandler(async (req: Request, res: Response) => {
   }
 }));
 
-// 列出所有 SQL 性能分析历史（按时间倒序）
-router.get('/analysis-history', asyncHandler(async (_req: Request, res: Response) => {
+// 列出所有 SQL 性能分析历史（支持分页：?page=1&pageSize=10；按时间倒序）
+router.get('/analysis-history', asyncHandler(async (req: Request, res: Response) => {
   try {
-    const items = aiService.listAnalysisHistory();
-    success(res, { items, total: items.length });
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.pageSize) || 10;
+    const result = aiService.listAnalysisHistoryPage(page, pageSize);
+    success(res, { items: result.items, total: result.total, page, pageSize });
   } catch (error: any) {
     fail(res, error.message || '获取分析历史失败');
+  }
+}));
+
+// 删除单条 SQL 性能分析历史
+router.delete('/analysis-history/:id', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    if (!id) {
+      fail(res, 'id 不能为空', 400);
+      return;
+    }
+    const ok = aiService.deleteAnalysisHistory(id);
+    if (!ok) {
+      fail(res, '记录不存在', 404);
+      return;
+    }
+    success(res, true, '删除成功');
+  } catch (error: any) {
+    fail(res, error.message || '删除失败');
   }
 }));
 

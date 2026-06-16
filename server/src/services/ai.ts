@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage, IPromptTemplate, IPromptTemplateType } from '../types';
-import { aiConfigStore, aiHistoryStore, readActiveAiConfig, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, clearAnalysisCache } from '../store/json-store';
+import { aiConfigStore, aiHistoryStore, readActiveAiConfig, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, listAnalysisCachePage, deleteAnalysisCacheById, clearAnalysisCache } from '../store/json-store';
 import { getTablesSchemaForAI } from './database';
 import { explainQuery } from './query';
 import { config } from '../config';
@@ -233,19 +233,28 @@ export async function generateSqlStream(
 
 // ==================== SQL 优化（EXPLAIN + AI → 流式输出优化后 SQL） ====================
 
-function buildOptimizePrompt(sql: string, explainRows: Record<string, unknown>[], schema: string | null): string {
+function buildOptimizePrompt(
+  sql: string,
+  explainRows: Record<string, unknown>[],
+  schema: string | null,
+  analysis?: string
+): string {
   const explainText = explainRows.length
     ? explainRows.map((r) => JSON.stringify(r)).join('\n')
     : '（EXPLAIN 未返回结果）';
   const template = getPromptTemplate('optimize_sql');
-  return template.prompt
+  let prompt = template.prompt
     .replace(/\$\{sql\}/g, sql)
     .replace(/\$\{explain\}/g, explainText)
     .replace(/\$\{schema\}/g, schema || '（调用方未提供表结构信息）');
+  if (analysis && analysis.trim()) {
+    prompt += `\n\n【本次分析结论（用于参考）】\n${analysis}\n`;
+  }
+  return prompt;
 }
 
 export async function optimizeSqlStream(
-  request: { connectionId: string; database: string; sql: string; tables?: string[] },
+  request: { connectionId: string; database: string; sql: string; tables?: string[]; analysis?: string },
   onMessage: (msg: ISseMessage) => void
 ): Promise<void> {
   const aiConfig = getActiveAiConfig();
@@ -272,8 +281,8 @@ export async function optimizeSqlStream(
     }
   }
 
-  // 3. 构造 prompt 并流式输出
-  const prompt = buildOptimizePrompt(trimmedSql, explainRows, schema);
+  // 3. 构造 prompt 并流式输出（analysis 为调用方传入的本次分析结论，可选）
+  const prompt = buildOptimizePrompt(trimmedSql, explainRows, schema, request.analysis);
   onMessage({ type: 'thinking', content: '正在根据 EXPLAIN 结果生成优化 SQL...' });
 
   const response = await fetch(aiConfig.apiUrl, {
@@ -514,6 +523,14 @@ export async function explainSql(sql: string): Promise<{ explanation: string }> 
 
 export function listAnalysisHistory() {
   return listAnalysisCache();
+}
+
+export function listAnalysisHistoryPage(page: number, pageSize: number) {
+  return listAnalysisCachePage(page, pageSize);
+}
+
+export function deleteAnalysisHistory(id: string): boolean {
+  return deleteAnalysisCacheById(id);
 }
 
 export function clearAnalysisHistory(): number {

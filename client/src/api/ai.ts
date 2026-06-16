@@ -137,6 +137,7 @@ export function resetPromptTemplate(type: PromptTemplateType) {
 // ==================== SQL 性能分析 ====================
 
 export interface ISqlAnalyzeResult {
+  id?: string
   explain: Record<string, unknown>[]
   analysis: string
   cached?: boolean
@@ -147,10 +148,15 @@ export function analyzeSql(data: { connectionId: string; database: string; sql: 
   return request.post<any, { code: number; data: ISqlAnalyzeResult }>('/ai/analyze', data)
 }
 
-export function getAnalysisHistory() {
-  return request.get<any, { code: number; data: { items: ISqlAnalyzeResult[]; total: number } }>(
-    '/ai/analysis-history'
+export function getAnalysisHistory(params?: { page?: number; pageSize?: number }) {
+  return request.get<any, { code: number; data: { items: ISqlAnalyzeResult[]; total: number; page: number; pageSize: number } }>(
+    '/ai/analysis-history',
+    { params }
   )
+}
+
+export function deleteAnalysisHistory(id: string) {
+  return request.delete<any, { code: number; data: boolean }>(`/ai/analysis-history/${id}`)
 }
 
 export function clearAnalysisHistory() {

@@ -272,6 +272,7 @@ export const aiHistoryStore = new JsonStore<{ id: string; [key: string]: unknown
 // ==================== SQL 性能分析缓存（按 SQL 内容哈希） ====================
 
 export interface ISqlAnalysisCacheEntry {
+  id: string;
   sql: string;
   analysis: string;
   explain: Record<string, unknown>[];
@@ -303,24 +304,45 @@ function hashSql(sql: string): string {
 export function findAnalysisCache(sql: string): ISqlAnalysisCacheEntry | undefined {
   if (!sql) return undefined;
   const targetHash = hashSql(sql);
-  const items = analysisCacheStore.read();
+  const items = readAnalysisCacheWithMigration();
   for (const item of items) {
     if (item && hashSql(item.sql) === targetHash) return item;
   }
   return undefined;
 }
 
+function readAnalysisCacheWithMigration(): ISqlAnalysisCacheEntry[] {
+  const items = analysisCacheStore.read();
+  let changed = false;
+  for (let i = 0; i < items.length; i++) {
+    if (!items[i] || !items[i].id) {
+      items[i] = {
+        ...(items[i] || {}),
+        id: uuidv4(),
+        sql: (items[i] as any)?.sql || '',
+        analysis: (items[i] as any)?.analysis || '',
+        explain: (items[i] as any)?.explain || [],
+        createdAt: (items[i] as any)?.createdAt || new Date().toISOString(),
+      };
+      changed = true;
+    }
+  }
+  if (changed) analysisCacheStore.write(items);
+  return items;
+}
+
 export function saveAnalysisCache(sql: string, analysis: string, explain: Record<string, unknown>[]): ISqlAnalysisCacheEntry {
+  const items = readAnalysisCacheWithMigration();
+  const targetHash = hashSql(sql);
+  const existingIdx = items.findIndex(i => hashSql(i.sql) === targetHash);
   const entry: ISqlAnalysisCacheEntry = {
+    id: existingIdx >= 0 && items[existingIdx]?.id ? items[existingIdx].id : uuidv4(),
     sql,
     analysis,
     explain,
     createdAt: new Date().toISOString(),
   };
   // 若已存在相同 SQL，则覆盖；否则追加
-  const items = analysisCacheStore.read();
-  const targetHash = hashSql(sql);
-  const existingIdx = items.findIndex(i => hashSql(i.sql) === targetHash);
   if (existingIdx >= 0) {
     items[existingIdx] = entry;
   } else {
@@ -334,16 +356,38 @@ export function saveAnalysisCache(sql: string, analysis: string, explain: Record
   return entry;
 }
 
+export function deleteAnalysisCacheById(id: string): boolean {
+  if (!id) return false;
+  const items = readAnalysisCacheWithMigration();
+  const idx = items.findIndex(i => i && i.id === id);
+  if (idx < 0) return false;
+  items.splice(idx, 1);
+  analysisCacheStore.write(items);
+  return true;
+}
+
 export function clearAnalysisCache(): number {
-  const count = (analysisCacheStore.read() || []).length;
+  const count = (readAnalysisCacheWithMigration() || []).length;
   analysisCacheStore.write([]);
   return count;
 }
 
 export function listAnalysisCache(): ISqlAnalysisCacheEntry[] {
-  const items = analysisCacheStore.read();
+  const items = readAnalysisCacheWithMigration();
   // 按 createdAt 倒序返回，最新的在最前
   return [...items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export function listAnalysisCachePage(page: number, pageSize: number): { items: ISqlAnalysisCacheEntry[]; total: number } {
+  const items = readAnalysisCacheWithMigration();
+  // 按 createdAt 倒序
+  const sorted = [...items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const total = sorted.length;
+  const safePage = Math.max(1, Number.isFinite(page) ? page : 1);
+  const safeSize = Math.max(1, Math.min(200, Number.isFinite(pageSize) ? pageSize : 10));
+  const start = (safePage - 1) * safeSize;
+  const end = start + safeSize;
+  return { items: sorted.slice(start, end), total };
 }
 
 // AI 配置存储（多配置 + activeId）

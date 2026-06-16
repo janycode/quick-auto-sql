@@ -89,6 +89,21 @@
               class="analyze-text hljs"
               v-html="highlightedAnalysis"
             ></pre>
+            <div
+              v-if="analysisLevel !== 'good'"
+              class="apply-optimize-row"
+            >
+              <el-button
+                type="success"
+                :disabled="applyOptState === 'done'"
+                :loading="applyOptState === 'loading'"
+                @click="handleApplyOptimization"
+              >
+                <template v-if="applyOptState === 'idle'">应用优化</template>
+                <template v-else-if="applyOptState === 'loading'">优化中{{ applyOptDots }}</template>
+                <template v-else>优化完成，结果已在 AI SQL 对话中</template>
+              </el-button>
+            </div>
           </div>
 
           <div v-if="analyzeResult && analyzeResult.explain.length" class="analyze-collapse-wrap">
@@ -157,7 +172,7 @@
     <el-dialog
       v-model="historyDialogVisible"
       title="SQL 分析历史"
-      width="820px"
+      width="920px"
       :close-on-click-modal="false"
     >
       <div class="history-toolbar">
@@ -165,7 +180,7 @@
           清空历史
         </el-button>
         <div style="flex: 1" />
-        <el-text type="info" size="small">共 {{ historyItems.length }} 条</el-text>
+        <el-text type="info" size="small">共 {{ historyTotal }} 条</el-text>
       </div>
 
       <el-empty
@@ -181,11 +196,15 @@
         border
         stripe
         style="width: 100%"
-        @row-click="handleViewHistoryItem"
+        v-loading="loadingHistory"
         highlight-current-row
       >
-        <el-table-column label="序号" type="index" width="55" align="center" />
-        <el-table-column label="SQL 片段" min-width="260">
+        <el-table-column label="序号" type="index" width="60" align="center">
+          <template #default="{ $index }">
+            {{ (historyPage - 1) * historyPageSize + $index + 1 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="SQL 片段" min-width="280">
           <template #default="{ row }">
             <span
               class="history-sql"
@@ -203,23 +222,47 @@
             {{ row.sql.length }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" align="center" fixed="right">
+        <el-table-column label="操作" width="240" align="center" fixed="right">
           <template #default="{ row }">
-            <el-button
-              link
-              type="primary"
-              size="small"
-              @click.stop="handleViewHistoryItem(row)"
-            >查看详情</el-button>
-            <el-button
-              link
-              type="success"
-              size="small"
-              @click.stop="handleCopyHistorySql(row)"
-            >复制 SQL</el-button>
+            <div class="history-actions">
+              <el-button
+                link
+                type="primary"
+                size="small"
+                @click.stop="handleViewHistoryItem(row)"
+              >详情</el-button>
+              <span class="history-actions-sep">|</span>
+              <el-button
+                link
+                type="success"
+                size="small"
+                @click.stop="handleCopyHistorySql(row)"
+              >复制 SQL</el-button>
+              <span class="history-actions-sep">|</span>
+              <el-button
+                link
+                type="danger"
+                size="small"
+                @click.stop="handleDeleteHistoryItem(row)"
+              >删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
+
+      <div v-if="historyTotal > 0" class="history-pagination">
+        <el-pagination
+          v-model:current-page="historyPage"
+          v-model:page-size="historyPageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="historyTotal"
+          layout="total, sizes, prev, pager, next, jumper"
+          small
+          background
+          @size-change="handlePageSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
 
       <template #footer>
         <el-button @click="historyDialogVisible = false">关闭</el-button>
@@ -307,6 +350,9 @@ import { CaretRight, MagicStick, Delete, TrendCharts, Clock } from '@element-plu
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as monaco from 'monaco-editor'
 import { formatSql } from '@/utils/sql-formatter'
+import { fetchSSE } from '@/utils/sse'
+import { useConnectionStore } from '@/stores/connection'
+import { useWorkspaceStore } from '@/stores/workspace'
 import * as aiApi from '@/api/ai'
 import * as databaseApi from '@/api/database'
 import type { IDatabase, IColumn } from '@/api/database'
@@ -868,36 +914,63 @@ const analyzeResult = ref<{
 // 默认展开 EXPLAIN 结果，允许用户折叠
 const explainCollapseState = ref<string | string[]>(['explain'])
 
+// 应用优化：中/差级分析后触发
+const applyOptState = ref<'idle' | 'loading' | 'done'>('idle')
+const applyOptDots = ref('')
+let applyOptDotsTimer: ReturnType<typeof setInterval> | null = null
+let applyOptController: AbortController | null = null
+
+const connectionStore = useConnectionStore()
+const workspaceStore = useWorkspaceStore()
+
 // 分析历史相关
 const historyDialogVisible = ref(false)
 const historyDetailVisible = ref(false)
 const loadingHistory = ref(false)
 interface IHistoryItem {
+  id?: string
   sql: string
   analysis: string
   explain: Record<string, unknown>[]
   createdAt: string
 }
 const historyItems = ref<IHistoryItem[]>([])
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const historyPageSize = ref(10)
 const historyDetailItem = ref<IHistoryItem | null>(null)
 const historyDetailCollapse = ref<string | string[]>(['sql', 'explain'])
 
 async function handleOpenAnalysisHistory() {
   historyDialogVisible.value = true
+  historyPage.value = 1
   await loadAnalysisHistory()
 }
 
 async function loadAnalysisHistory() {
   loadingHistory.value = true
   try {
-    const resp = await aiApi.getAnalysisHistory()
+    const resp = await aiApi.getAnalysisHistory({ page: historyPage.value, pageSize: historyPageSize.value })
     historyItems.value = (resp?.data?.items as IHistoryItem[]) || []
+    historyTotal.value = (resp?.data?.total as number) || 0
   } catch (e: any) {
     ElMessage.error(e?.message || '获取分析历史失败')
     historyItems.value = []
+    historyTotal.value = 0
   } finally {
     loadingHistory.value = false
   }
+}
+
+async function handlePageChange(page: number) {
+  historyPage.value = page
+  await loadAnalysisHistory()
+}
+
+async function handlePageSizeChange(size: number) {
+  historyPageSize.value = size
+  historyPage.value = 1
+  await loadAnalysisHistory()
 }
 
 function handleViewHistoryItem(row: IHistoryItem) {
@@ -921,14 +994,41 @@ function handleCopyHistorySql(row: IHistoryItem) {
   }
 }
 
+async function handleDeleteHistoryItem(row: IHistoryItem) {
+  if (!row || !row.id) {
+    ElMessage.warning('该记录无法被删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('确定删除该条分析历史吗？此操作不可恢复。', '删除历史', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await aiApi.deleteAnalysisHistory(row.id)
+    ElMessage.success('已删除')
+    // 删除后若当前页为空且不是第一页，则回退一页
+    if (historyItems.value.length === 1 && historyPage.value > 1) {
+      historyPage.value -= 1
+    }
+    await loadAnalysisHistory()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
+}
+
 async function handleClearHistory() {
-  if (!historyItems.value.length) {
+  if (!historyTotal.value) {
     ElMessage.info('历史已为空')
     return
   }
   try {
     await ElMessageBox.confirm(
-      `确定清空全部 ${historyItems.value.length} 条分析历史？此操作不可恢复。`,
+      `确定清空全部 ${historyTotal.value} 条分析历史？此操作不可恢复。`,
       '清空历史',
       { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
     )
@@ -938,6 +1038,8 @@ async function handleClearHistory() {
   try {
     await aiApi.clearAnalysisHistory()
     ElMessage.success('已清空分析历史')
+    historyPage.value = 1
+    historyTotal.value = 0
     historyItems.value = []
   } catch (e: any) {
     ElMessage.error(e?.message || '清空历史失败')
@@ -1536,6 +1638,7 @@ async function handleAnalyze() {
 
   analyzeResult.value = null
   explainCollapseState.value = ['explain']
+  applyOptState.value = 'idle'
   analyzeDialogVisible.value = true
   analyzing.value = true
   startLoadingAnimation()
@@ -1559,6 +1662,127 @@ async function handleAnalyze() {
     }, 250)
   }
 }
+
+// 基于 EXPLAIN 关键字段 + 分析文本关键词进行等级判定
+function rateAnalysisLevel(explain: Record<string, unknown>[] | undefined, analysis: string | undefined): 'good' | 'medium' | 'bad' {
+  if (Array.isArray(explain) && explain.length) {
+    for (const row of explain) {
+      const type = row.type ? String(row.type).toUpperCase() : ''
+      const extra = row.Extra ? String(row.Extra).toUpperCase() : ''
+      const rows = Number(row.rows)
+      const filtered = Number(row.filtered)
+      if (type === 'ALL') return 'bad'
+      if (extra.includes('USING TEMPORARY') || extra.includes('USING FILESORT')) return 'bad'
+      if (Number.isFinite(rows) && rows >= 50000) return 'bad'
+      if (Number.isFinite(filtered) && filtered < 10) return 'medium'
+    }
+    // 未命中明显问题 → 再看 rows/filtered 的中等阈值
+    for (const row of explain) {
+      const rows = Number(row.rows)
+      const filtered = Number(row.filtered)
+      if (Number.isFinite(rows) && rows >= 5000) return 'medium'
+      if (Number.isFinite(filtered) && filtered < 30) return 'medium'
+    }
+  }
+  if (analysis) {
+    const upper = analysis.toUpperCase()
+    if (/(?:严重|性能差|必须优化|强烈建议)/.test(analysis) || upper.includes('USE INDEX')) return 'bad'
+    if (/(?:建议|可优化|可能|可以|全表扫描|临时表|filesort)/i.test(analysis)) return 'medium'
+  }
+  return 'good'
+}
+
+const analysisLevel = computed(() => {
+  if (!analyzeResult.value) return 'good' as const
+  return rateAnalysisLevel(analyzeResult.value.explain, analyzeResult.value.analysis)
+})
+
+function startApplyOptDots() {
+  applyOptDots.value = '.'
+  let count = 1
+  if (applyOptDotsTimer) clearInterval(applyOptDotsTimer)
+  applyOptDotsTimer = setInterval(() => {
+    count = (count % 3) + 1
+    applyOptDots.value = '.'.repeat(count)
+  }, 500)
+}
+
+function stopApplyOptDots() {
+  if (applyOptDotsTimer) {
+    clearInterval(applyOptDotsTimer)
+    applyOptDotsTimer = null
+  }
+  applyOptDots.value = ''
+}
+
+async function handleApplyOptimization() {
+  if (!analyzeResult.value) {
+    ElMessage.warning('请先完成 SQL 性能分析')
+    return
+  }
+  const sql = getActiveSql()
+  if (!sql) {
+    ElMessage.warning('请先输入 SQL')
+    return
+  }
+  if (!props.connectionId) {
+    ElMessage.warning('请先选择数据库连接')
+    return
+  }
+  if (!currentDatabase.value) {
+    ElMessage.warning('请先选择数据库')
+    return
+  }
+
+  // 把当前 SQL 放入 workspaceStore.aiGeneratedSql，保证 AI 对话面板能显示「原始 SQL」
+  workspaceStore.setAiGeneratedSql(sql)
+  workspaceStore.setAiOptimizedSql('')
+
+  applyOptState.value = 'loading'
+  startApplyOptDots()
+
+  let rawBuf = ''
+  applyOptController = fetchSSE('/api/ai/optimize', {
+    connectionId: props.connectionId,
+    database: currentDatabase.value,
+    sql,
+    tables: workspaceStore.checkedTables.map((t) => t.table),
+    analysis: analyzeResult.value.analysis,
+  }, {
+    onMessage: (data: any) => {
+      if (data?.type === 'sql' && typeof data.content === 'string') {
+        rawBuf += data.content
+        workspaceStore.setAiOptimizedSql(rawBuf)
+      } else if (data?.type === 'error') {
+        ElMessage.error(typeof data.content === 'string' ? data.content : '优化失败')
+      }
+    },
+    onError: (err) => {
+      ElMessage.error(err?.message || '优化失败')
+      applyOptState.value = 'idle'
+      stopApplyOptDots()
+    },
+    onComplete: () => {
+      try {
+        const formatted = formatSql(rawBuf)
+        workspaceStore.setAiOptimizedSql(formatted)
+      } catch {
+        // 保持原结果
+      }
+      applyOptState.value = 'done'
+      stopApplyOptDots()
+      ElMessage.success('优化完成，结果已写入 AI SQL 对话')
+    },
+  })
+}
+
+onBeforeUnmount(() => {
+  stopApplyOptDots()
+  if (applyOptController) {
+    try { applyOptController.abort() } catch {}
+    applyOptController = null
+  }
+})
 
 defineExpose({ setSql })
 </script>
@@ -1624,6 +1848,26 @@ defineExpose({ setSql })
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.history-actions-sep {
+  color: #dcdfe6;
+  font-size: 12px;
+  user-select: none;
+}
+
+.history-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .history-detail-pre {
@@ -1870,6 +2114,12 @@ defineExpose({ setSql })
 
 .analyze-collapse {
   margin-top: 0;
+}
+
+.apply-optimize-row {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .explain-legend {

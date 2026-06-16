@@ -122,10 +122,11 @@
 
         <div class="history-list" v-loading="historyLoading">
           <div
-            v-for="item in filteredHistory"
+            v-for="(item, index) in paginatedHistory"
             :key="item.id"
             class="history-item"
           >
+            <div class="history-index">{{ (historyPage - 1) * historyPageSize + index + 1 }}</div>
             <div class="history-content">
               <div class="history-question-row">
                 <el-tooltip content="复制提示词" placement="top">
@@ -157,6 +158,18 @@
           <div v-if="!historyLoading && filteredHistory.length === 0" class="history-empty">
             <el-empty :description="aiStore.history.length ? '没有匹配的历史记录' : '暂无历史对话'" :image-size="60" />
           </div>
+        </div>
+
+        <div class="history-pagination" v-if="filteredHistory.length > historyPageSize">
+          <el-pagination
+            v-model:current-page="historyPage"
+            v-model:page-size="historyPageSize"
+            :page-sizes="[10, 20, 50]"
+            :total="filteredHistory.length"
+            layout="prev, pager, next, jumper, sizes, total"
+            background
+            small
+          />
         </div>
       </el-dialog>
     </Teleport>
@@ -286,6 +299,8 @@ const showSqlPreview = ref(false)
 const searchKeyword = ref('')
 const historyLoading = ref(false)
 const currentPreviewSql = ref('')
+const historyPage = ref(1)
+const historyPageSize = ref(10)
 
 const filteredHistory = computed(() => {
   const kw = searchKeyword.value.trim().toLowerCase()
@@ -296,6 +311,20 @@ const filteredHistory = computed(() => {
     (h.database || '').toLowerCase().includes(kw) ||
     (h.tables || []).some(t => t.toLowerCase().includes(kw))
   )
+})
+
+const paginatedHistory = computed(() => {
+  const start = (historyPage.value - 1) * historyPageSize.value
+  const end = start + historyPageSize.value
+  return filteredHistory.value.slice(start, end)
+})
+
+watch(searchKeyword, () => {
+  historyPage.value = 1
+})
+
+watch(historyPageSize, () => {
+  historyPage.value = 1
 })
 
 // 由 Workspace 调用：同步左侧树勾选的表
@@ -315,6 +344,7 @@ function handleClear() {
 
 async function handleOpenHistory() {
   showHistoryModal.value = true
+  historyPage.value = 1
   historyLoading.value = true
   try {
     await aiStore.fetchHistory()
@@ -717,8 +747,7 @@ defineExpose({ setCheckedTables })
 }
 
 .history-list {
-  max-height: 480px;
-  overflow-y: auto;
+  min-height: 80px;
 }
 
 .history-item {
@@ -733,6 +762,16 @@ defineExpose({ setCheckedTables })
   &:hover { background-color: #f5f7fa; }
 }
 
+.history-index {
+  flex-shrink: 0;
+  width: 32px;
+  text-align: center;
+  font-size: 12px;
+  color: #909399;
+  font-family: Consolas, Monaco, monospace;
+  font-weight: 500;
+}
+
 .history-content { flex: 1; overflow: hidden; min-width: 0; }
 .history-question-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .copy-question-icon { font-size: 14px; color: #909399; cursor: pointer; &:hover { color: #409eff; } }
@@ -745,6 +784,14 @@ defineExpose({ setCheckedTables })
 
 .history-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .history-empty { padding: 24px 0; }
+
+.history-pagination {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+  margin-top: 8px;
+}
 
 .sql-preview-code {
   margin: 0; padding: 0; border: 1px solid #e8e8e8; border-radius: 4px;
