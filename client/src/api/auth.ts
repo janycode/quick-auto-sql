@@ -31,7 +31,7 @@ export function register(data: IRegisterRequest) {
 }
 
 export function sendEmailCode(data: { email: string }) {
-  return request.post<any, { code: number; data: { sent: boolean; expiresIn: number; devMode?: boolean } }>(
+  return request.post<any, { code: number; data: { sent: boolean; expiresIn: number; devMode?: boolean; previewUrl?: string } }>(
     '/auth/email/send-code',
     data
   )

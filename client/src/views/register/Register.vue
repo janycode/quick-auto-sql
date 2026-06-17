@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-card" role="form" aria-label="注册">
-      <div class="brand">
+      <div class="brand" role="button" tabindex="0" @click="router.push('/')" @keyup.enter.space.prevent="router.push('/')">
         <div class="logo" aria-hidden="true">
           <svg viewBox="0 0 64 64" width="56" height="56">
             <defs>
@@ -327,6 +327,19 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 14px;
   margin-bottom: 20px;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s ease;
+
+  &:hover {
+    opacity: 0.85;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #5b8def;
+    outline-offset: 4px;
+    border-radius: 8px;
+  }
 }
 
 .logo {

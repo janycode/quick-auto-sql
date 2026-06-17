@@ -73,6 +73,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { IQueryResult } from '@/api/query'
 
+declare const Buffer: any
+
 const props = defineProps<{
   result: IQueryResult | null
 }>()
@@ -113,6 +115,25 @@ function getColumnComment(col: string): string {
 }
 
 /**
+ * 将 Buffer/字节数组格式化展示
+ * - 单个字节：直接显示数字值（如 [0] -> "0"）
+ * - 可打印文本：显示字符串
+ * - 其他：显示十六进制
+ */
+function formatBufferBytes(buf: { toString: (encoding?: string) => string; length: number }): string {
+  if (buf.length === 0) return '';
+  if (buf.length === 1) {
+    return buf.toString('utf-8').charCodeAt(0).toString();
+  }
+  const text = buf.toString('utf-8');
+  if (!text.includes('\u0000') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(text)) {
+    return text;
+  }
+  const hex = buf.toString('hex');
+  return hex.length > 64 ? hex.slice(0, 64) + '...' : hex;
+}
+
+/**
  * 格式化单元格值，支持各种 MySQL 字段类型
  * - null/undefined: 空字符串
  * - Date: YYYY-MM-DD HH:mm:ss
@@ -135,14 +156,36 @@ function formatCellValue(value: unknown): string {
 
   // Buffer 类型（BLOB、BINARY、VARBINARY 等）
   if (typeof Buffer !== 'undefined' && value instanceof Buffer) {
-    // 优先尝试 UTF-8 解码
-    const text = value.toString('utf-8');
-    // 如果是可打印字符（无 \0），当作字符串显示
-    if (!text.includes('\u0000') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(text)) {
-      return text;
+    return formatBufferBytes(value as any);
+  }
+
+  // JSON 序列化后的 Buffer 对象：{"type":"Buffer","data":[0,1,...]}
+  // 通过 HTTP API 返回时，Node.js 的 Buffer 会被 JSON.stringify 序列化成这种结构
+  if (
+    value &&
+    typeof value === 'object' &&
+    (value as any).type === 'Buffer' &&
+    Array.isArray((value as any).data)
+  ) {
+    const bytes = (value as any).data as number[];
+    if (bytes.length === 0) return '';
+    if (typeof Buffer !== 'undefined') {
+      return formatBufferBytes(Buffer.from(bytes));
     }
-    // 否则显示十六进制（限制长度避免过长）
-    const hex = value.toString('hex');
+    // 浏览器环境，手动处理：单个字节直接显示数字；否则尝试文本或 hex
+    if (bytes.length === 1) {
+      return bytes[0].toString();
+    }
+    // 尝试当作 UTF-8 文本
+    try {
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
+      if (!text.includes('\u0000') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(text)) {
+        return text;
+      }
+    } catch {
+      // 忽略，回落到 hex
+    }
+    const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
     return hex.length > 64 ? hex.slice(0, 64) + '...' : hex;
   }
 

@@ -75,6 +75,36 @@ export async function fetchAiModels(providerName: string | undefined, apiKey: st
   throw new Error('模型列表响应格式不兼容');
 }
 
+// 测试 AI 配置连接（后端代理调用 chat completions 接口，最小请求）
+export async function testAiConnection(apiKey: string, apiUrl: string, model?: string): Promise<{ ok: true; status: number }> {
+  if (!apiKey) {
+    throw new Error('API Key 必填');
+  }
+  if (!apiUrl) {
+    throw new Error('API URL 必填');
+  }
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: model || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'Hi' }],
+      max_tokens: 5,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`${response.status} ${text}`);
+  }
+
+  return { ok: true, status: response.status };
+}
+
 // 获取 AI 配置列表（含 activeId）
 export function getAiConfigList(): IAiConfigStoreData {
   return aiConfigStore.read();

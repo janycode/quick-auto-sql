@@ -104,6 +104,11 @@ export function fetchAiModels(provider: string, apiKey: string, modelsUrl?: stri
   return request.post<any, { code: number; data: string[] }>('/ai/models', { provider, apiKey, modelsUrl })
 }
 
+// 测试 AI 配置连接（走后端代理，避免浏览器 CORS 问题）
+export function testAiConnection(data: { apiKey: string; apiUrl: string; model?: string }) {
+  return request.post<any, { code: number; data: { ok: true; status: number } }>('/ai/test', data)
+}
+
 // ==================== 提示词模板 ====================
 
 export type PromptTemplateType = 'generate_sql' | 'analyze_sql' | 'explain_sql'

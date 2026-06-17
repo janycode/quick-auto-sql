@@ -42,6 +42,25 @@ router.post('/models', asyncHandler(async (req: Request, res: Response) => {
   success(res, models);
 }));
 
+// 测试 AI 配置连接（后端代理调用 chat completions，避免浏览器 CORS）
+router.post('/test', asyncHandler(async (req: Request, res: Response) => {
+  const { apiKey, apiUrl, model } = req.body || {};
+  if (!apiKey) {
+    fail(res, 'apiKey 必填');
+    return;
+  }
+  if (!apiUrl) {
+    fail(res, 'apiUrl 必填');
+    return;
+  }
+  const result = await aiService.testAiConnection(
+    apiKey as string,
+    apiUrl as string,
+    model as string | undefined
+  );
+  success(res, result);
+}));
+
 // 获取 AI 配置列表（含 activeId）
 router.get('/configs', asyncHandler(async (_req: Request, res: Response) => {
   const data = aiService.getAiConfigList();

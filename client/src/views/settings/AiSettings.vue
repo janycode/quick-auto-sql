@@ -32,6 +32,16 @@
                 </div>
               </div>
               <div class="config-actions">
+                <el-button
+                  type="primary"
+                  size="small"
+                  link
+                  :icon="Connection"
+                  :loading="testingId === item.id"
+                  @click="handleTestConfig(item)"
+                >
+                  测试连接
+                </el-button>
                 <el-tag
                   v-if="configStore.activeId === item.id"
                   type="success"
@@ -108,7 +118,7 @@
             <el-form-item label="API Key" required>
               <el-input
                 v-model="form.apiKey"
-                placeholder="输入 API Key"
+                placeholder="输入 API Key，如：sk-..."
                 show-password
                 clearable
                 @blur="handleApiKeyBlur"
@@ -118,7 +128,7 @@
             <el-form-item label="API URL" required>
               <el-input
                 v-model="form.apiUrl"
-                placeholder="聊天补全接口 URL"
+                placeholder="聊天补全接口 URL，如：https://.../v1/chat/completions"
                 clearable
               />
             </el-form-item>
@@ -127,7 +137,7 @@
             <el-form-item label="获取模型URL" required>
               <el-input
                 v-model="form.modelsUrl"
-                :placeholder="selectedProvider === 'custom' ? '模型列表接口 URL' : '请选择服务商'"
+                :placeholder="selectedProvider === 'custom' ? '模型列表接口 URL，如：https://.../models' : '请选择服务商'"
                 :disabled="selectedProvider !== 'custom' && selectedProvider !== ''"
                 clearable
               />
@@ -188,8 +198,8 @@
 import { computed, ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, WarningFilled, Check, InfoFilled } from '@element-plus/icons-vue'
-import type { IAiProvider } from '@/api/ai'
+import { Delete, WarningFilled, Check, InfoFilled, Connection } from '@element-plus/icons-vue'
+import type { IAiProvider, IAiConfig } from '@/api/ai'
 import * as aiApi from '@/api/ai'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import { useAiStore } from '@/stores/ai'
@@ -200,6 +210,7 @@ const { configStore } = storeToRefs(aiStore)
 const activatingId = ref('')
 const deletingId = ref('')
 const adding = ref(false)
+const testingId = ref('')
 
 // 服务商列表
 const providers = ref<IAiProvider[]>([])
@@ -346,7 +357,40 @@ async function handleAdd() {
   }
 }
 
-// 测试连接
+// 共享：AI API 连接测试（走后端代理，避免浏览器 CORS）
+async function testConnection(params: { apiKey: string; apiUrl: string; model: string }) {
+  const { apiKey, apiUrl, model } = params
+  if (!apiKey) {
+    throw new Error('API Key 不能为空')
+  }
+  if (!apiUrl) {
+    throw new Error('API URL 不能为空')
+  }
+  await aiApi.testAiConnection({
+    apiKey,
+    apiUrl,
+    model,
+  })
+}
+
+// 测试保存的配置
+async function handleTestConfig(config: IAiConfig) {
+  testingId.value = config.id
+  try {
+    await testConnection({
+      apiKey: config.apiKey,
+      apiUrl: config.apiUrl,
+      model: config.model,
+    })
+    ElMessage.success('连接成功')
+  } catch (err: any) {
+    ElMessage.error(`连接失败: ${err.message}`)
+  } finally {
+    testingId.value = ''
+  }
+}
+
+// 测试连接（添加前的表单）
 async function handleTest() {
   if (!form.value.apiKey) {
     ElMessage.warning('请先输入 API Key')
@@ -357,24 +401,12 @@ async function handleTest() {
     return
   }
   try {
-    const response = await fetch(form.value.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${form.value.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: form.value.model || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: 'Hello' }],
-        max_tokens: 5,
-      }),
+    await testConnection({
+      apiKey: form.value.apiKey,
+      apiUrl: form.value.apiUrl,
+      model: form.value.model,
     })
-    if (response.ok) {
-      ElMessage.success('AI API 连接成功')
-    } else {
-      const text = await response.text()
-      ElMessage.error(`连接失败: ${response.status} ${text}`)
-    }
+    ElMessage.success('AI API 连接成功')
   } catch (error: any) {
     ElMessage.error(`连接失败: ${error.message}`)
   }

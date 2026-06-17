@@ -229,21 +229,21 @@
                 link
                 type="primary"
                 size="small"
-                @click.stop="handleViewHistoryItem(row)"
+                @click.stop="handleViewHistoryItem(row as IHistoryItem)"
               >详情</el-button>
               <span class="history-actions-sep">|</span>
               <el-button
                 link
                 type="success"
                 size="small"
-                @click.stop="handleCopyHistorySql(row)"
+                @click.stop="handleCopyHistorySql(row as IHistoryItem)"
               >复制 SQL</el-button>
               <span class="history-actions-sep">|</span>
               <el-button
                 link
                 type="danger"
                 size="small"
-                @click.stop="handleDeleteHistoryItem(row)"
+                @click.stop="handleDeleteHistoryItem(row as IHistoryItem)"
               >删除</el-button>
             </div>
           </template>
@@ -557,6 +557,7 @@ function makeCompletionItem(
     insertText: insertText || label,
     insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
     sortText: label,
+    range: new monaco.Range(0, 0, 0, 0),
   }
 }
 
@@ -1154,7 +1155,7 @@ function cellTooltip(col: string, value: unknown): string {
 
   if (col === 'Extra') {
     const upper = str.toUpperCase();
-    const matches = [];
+    const matches: string[] = [];
     Object.keys(EXTRA_TIPS).forEach(function (k) {
       if (upper.indexOf(k.toUpperCase()) >= 0) matches.push(EXTRA_TIPS[k]);
     });

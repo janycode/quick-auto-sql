@@ -455,7 +455,8 @@ async function handleGenerate() {
   const connectionId = connectionStore.activeConnection.id
   const currentQuestion = question.value.trim()
 
-  // 单次请求：返回 Promise；失败或无结果则 reject
+  // 单次请求 Promise 化：成功 resolve(finalSql)，失败 reject(error)
+  // 不可重试错误会在 message 前加 'FATAL:' 前缀
   function callGenerateOnce() {
     return new Promise<string>((resolve, reject) => {
       let rawBuffer = ''
@@ -476,7 +477,10 @@ async function handleGenerate() {
             rawBuffer += data.content
             workspaceStore.setAiGeneratedSql(rawBuffer)
           } else if (data.type === 'error') {
-            reject(new Error(data.content || 'AI 接口返回错误'))
+            const msg = data.content || 'AI 接口返回错误'
+            // 对"配置缺失 / 鉴权失败"类错误标记为不可重试
+            const isFatal = /请先|API Key|Key|密钥|未配置|401|403|Unauthorized|key|invalid/i.test(msg)
+            reject(new Error(isFatal ? `FATAL:${msg}` : msg))
           } else if (data.type === 'done') {
             gotDone = true
             const finalSql = formatSql(rawBuffer)
@@ -484,21 +488,22 @@ async function handleGenerate() {
             if (gotAnySql && finalSql.trim()) {
               resolve(finalSql)
             } else {
-              reject(new Error('NO_RESULT'))
+              reject(new Error('AI 未返回有效 SQL，请重试'))
             }
           }
         },
         onError: (error: any) => {
-          reject(error)
+          // 网络层失败（后端未启动、CORS、断网等）
+          const msg = error?.message || String(error) || '网络请求失败'
+          reject(new Error(msg))
         },
         onComplete: () => {
-          // 流结束但没有收到 done + 有效内容时
           if (!gotDone) {
             const finalSql = formatSql(rawBuffer)
             if (gotAnySql && finalSql.trim()) {
               resolve(finalSql)
             } else {
-              reject(new Error('NO_RESULT'))
+              reject(new Error('AI 未返回有效 SQL，请重试'))
             }
           }
         },
@@ -508,39 +513,49 @@ async function handleGenerate() {
     })
   }
 
+  // 执行请求（最多 2 次，自动重试一次可恢复的错误）
+  let result = ''
+  let firstErrorMessage = ''
   try {
-    let result = ''
-    try {
-      result = await callGenerateOnce()
-    } catch (firstError: any) {
-      // 首次失败：自动重试一次
-      workspaceStore.setAiGeneratedSql('')
-      try {
-        result = await callGenerateOnce()
-      } catch {
-        // 重试也失败：统一提示"服务器繁忙"
-        ElMessage.error('AI接口服务器繁忙，请再次尝试')
-        generating.value = false
-        return
-      }
+    result = await callGenerateOnce()
+  } catch (firstError: any) {
+    firstErrorMessage = firstError?.message || ''
+    const isFatal = firstErrorMessage.startsWith('FATAL:')
+    const cleanMsg = firstErrorMessage.replace(/^FATAL:/, '')
+
+    if (isFatal) {
+      // 不可恢复的错误：直接展示给用户，不重试
+      ElMessage.error(cleanMsg)
+      generating.value = false
+      console.error('[AI] 不可恢复错误:', cleanMsg)
+      return
     }
 
-    // 成功：保存历史
-    generating.value = false
-    if (result && result.trim()) {
-      aiStore.addHistory({
-        connectionId,
-        database,
-        tables: tableNames,
-        question: currentQuestion,
-        sql: result,
-      }).catch(err => {
-        console.error('保存历史失败:', err)
-      })
+    // 可恢复错误：静默重试一次
+    workspaceStore.setAiGeneratedSql('')
+    try {
+      result = await callGenerateOnce()
+    } catch (secondError: any) {
+      const secondMsg = secondError?.message || ''
+      ElMessage.error(`AI 生成失败：${secondMsg.replace(/^FATAL:/, '') || firstErrorMessage.replace(/^FATAL:/, '')}`)
+      generating.value = false
+      console.error('[AI] 两次请求均失败，首次错误:', firstErrorMessage, '; 二次错误:', secondMsg)
+      return
     }
-  } catch {
-    generating.value = false
-    ElMessage.error('AI接口服务器繁忙，请再次尝试')
+  }
+
+  // 成功：保存历史
+  generating.value = false
+  if (result && result.trim()) {
+    aiStore.addHistory({
+      connectionId,
+      database,
+      tables: tableNames,
+      question: currentQuestion,
+      sql: result,
+    }).catch(err => {
+      console.error('保存历史失败:', err)
+    })
   }
 }
 
@@ -577,42 +592,87 @@ async function handleOptimize() {
 
   optimizing.value = true
   workspaceStore.setAiOptimizedSql('')
-  const rawOpt = ref('')
 
   const tableNames = workspaceStore.checkedTables.map((t: any) => t.table)
   const connectionId = connectionStore.activeConnection.id
+  const originalSql = workspaceStore.aiGeneratedSql
 
-  abortController = fetchSSE('/api/ai/optimize', {
-    connectionId,
-    database,
-    sql: workspaceStore.aiGeneratedSql,
-    tables: tableNames,
-  }, {
-    onMessage: (data: any) => {
-      if (data.type === 'thinking') {
-        // 思考中
-      } else if (data.type === 'sql') {
-        rawOpt.value += data.content
-        workspaceStore.setAiOptimizedSql(rawOpt.value)
-        scrollPanelToBottom()
-      } else if (data.type === 'error') {
-        ElMessage.error(data.content)
-      } else if (data.type === 'done') {
-        const finalSql = formatSql(rawOpt.value)
-        workspaceStore.setAiOptimizedSql(finalSql)
-        optimizing.value = false
-        scrollPanelToBottom()
-      }
-    },
-    onError: (error: any) => {
-      ElMessage.error(error.message)
-      optimizing.value = false
-    },
-    onComplete: () => {
-      optimizing.value = false
+  function callOptimizeOnce() {
+    return new Promise<string>((resolve, reject) => {
+      let rawOpt = ''
+      let gotAnySql = false
+      let gotDone = false
+
+      const ctrl = fetchSSE('/api/ai/optimize', {
+        connectionId,
+        database,
+        sql: originalSql,
+        tables: tableNames,
+      }, {
+        onMessage: (data: any) => {
+          if (data.type === 'thinking') {
+            // 思考中（正在跑 EXPLAIN）
+          } else if (data.type === 'sql') {
+            gotAnySql = true
+            rawOpt += data.content
+            workspaceStore.setAiOptimizedSql(rawOpt)
+            scrollPanelToBottom()
+          } else if (data.type === 'error') {
+            const msg = data.content || 'AI 接口返回错误'
+            const isFatal = /请先|API Key|Key|密钥|未配置|401|403|Unauthorized|key|invalid/i.test(msg)
+            reject(new Error(isFatal ? `FATAL:${msg}` : msg))
+          } else if (data.type === 'done') {
+            gotDone = true
+            const finalSql = formatSql(rawOpt)
+            workspaceStore.setAiOptimizedSql(finalSql)
+            scrollPanelToBottom()
+            if (gotAnySql && finalSql.trim()) {
+              resolve(finalSql)
+            } else {
+              reject(new Error('AI 未返回有效的优化 SQL，请重试'))
+            }
+          }
+        },
+        onError: (error: any) => {
+          reject(new Error(error?.message || '网络请求失败'))
+        },
+        onComplete: () => {
+          if (!gotDone) {
+            const finalSql = formatSql(rawOpt)
+            if (gotAnySql && finalSql.trim()) {
+              resolve(finalSql)
+            } else {
+              reject(new Error('AI 未返回有效的优化 SQL，请重试'))
+            }
+          }
+        },
+      })
+
+      abortController = ctrl
+    })
+  }
+
+  try {
+    const result = await callOptimizeOnce()
+    optimizing.value = false
+    if (result && result.trim()) {
       scrollPanelToBottom()
-    },
-  })
+      aiStore.addHistory({
+        connectionId,
+        database,
+        tables: tableNames,
+        question: `[优化] ${originalSql.slice(0, 60)}...`,
+        sql: result,
+      }).catch(err => {
+        console.error('保存优化SQL历史失败:', err)
+      })
+    }
+  } catch (err: any) {
+    optimizing.value = false
+    const msg = (err?.message || '').replace(/^FATAL:/, '')
+    ElMessage.error(`AI 优化失败：${msg || '未知错误'}`)
+    console.error('[AI] 优化SQL失败:', msg)
+  }
 }
 
 defineExpose({ setCheckedTables })

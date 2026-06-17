@@ -76,7 +76,7 @@ const activeTab = ref<PromptTemplateType>('generate_sql')
 
 const generateDraft = ref('')
 const analyzeDraft = ref('')
-const saving = ref<Record<PromptTemplateType, boolean>>({ generate_sql: false, analyze_sql: false })
+const saving = ref<Record<PromptTemplateType, boolean>>({ generate_sql: false, analyze_sql: false, explain_sql: false })
 
 watch(
   () => props.modelValue,

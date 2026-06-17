@@ -134,7 +134,7 @@
         >
           <div class="modal-header">
             <span class="modal-title">{{ currentTableInfo.database }}.{{ currentTableInfo.table }}<span v-if="currentTableInfo.comment" class="modal-comment"> - {{ currentTableInfo.comment }}</span></span>
-            <el-button size="mini" @click="closeTableModal">×</el-button>
+            <el-button size="small" @click="closeTableModal">×</el-button>
           </div>
           <div class="modal-body">
             <!-- DDL 代码区域（可折叠） -->
@@ -1144,8 +1144,8 @@ async function showTableStructure(database: string, table: string, comment?: str
   }
 
   // 设置弹窗位置
-  const mouseX = window.event?.clientX || 200
-  const mouseY = window.event?.clientY || 200
+  const mouseX = (window.event as MouseEvent)?.clientX || 200
+  const mouseY = (window.event as MouseEvent)?.clientY || 200
   const modalWidth = 900
   modalPosition.value = {
     x: Math.min(mouseX + 20, window.innerWidth - modalWidth - 40),
@@ -1315,7 +1315,7 @@ function handleCheck() {
     .filter((n: any) => n.type === 'table')
     .map((n: any) => ({ database: n.database, table: n.table, comment: n.comment || '' }))
   // 同步到 workspace store：表完整信息 + keys
-  const keys = tables.map(t => `table_${t.database}_${t.table}`)
+  const keys = tables.map((t: { database: string; table: string; comment: string }) => `table_${t.database}_${t.table}`)
   workspaceStore.setCheckedTables(tables, keys)
   emit('checked-tables-change', tables)
 }

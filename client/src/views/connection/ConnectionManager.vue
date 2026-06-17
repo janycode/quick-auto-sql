@@ -10,9 +10,9 @@
         <el-table-column prop="database" label="默认数据库" />
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click.stop="handleTest(row)">测试</el-button>
-            <el-button size="small" link type="primary" @click.stop="handleEdit(row)">编辑</el-button>
-            <el-popconfirm title="确定删除此连接？" @confirm="handleDelete(row)">
+            <el-button size="small" link type="primary" @click.stop="handleTest(row as IConnection)">测试</el-button>
+            <el-button size="small" link type="primary" @click.stop="handleEdit(row as IConnection)">编辑</el-button>
+            <el-popconfirm title="确定删除此连接？" @confirm="handleDelete(row as IConnection)">
               <template #reference>
                 <el-button size="small" link type="danger" @click.stop>删除</el-button>
               </template>

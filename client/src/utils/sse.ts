@@ -1,3 +1,5 @@
+import { authToken } from './request'
+
 // SSE 流式请求封装
 export interface ISseOptions {
   onMessage: (data: any) => void
@@ -8,9 +10,15 @@ export interface ISseOptions {
 export function fetchSSE(url: string, body: any, options: ISseOptions): AbortController {
   const controller = new AbortController()
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = authToken.get()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
     signal: controller.signal,
   })
