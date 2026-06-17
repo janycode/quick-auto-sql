@@ -136,6 +136,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     queryResult.value = result
   }
 
+  // 清空所有与连接相关的状态（切换连接时调用）
+  function clearAll() {
+    sql.value = ''
+    queryResult.value = null
+    aiQuestion.value = ''
+    aiGeneratedSql.value = ''
+    aiOptimizedSql.value = ''
+    checkedTables.value = []
+    checkedTableKeys.value = []
+    expandedKeys.value = []
+    currentDatabase.value = ''
+  }
+
   return {
     sql,
     queryResult,
@@ -160,5 +173,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     addExpandedKey,
     removeExpandedKey,
     clearExpandedKeys,
+    clearAll,
   }
 })

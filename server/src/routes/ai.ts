@@ -113,14 +113,14 @@ router.post('/history', asyncHandler(async (req: Request, res: Response) => {
   const missing = [];
   if (!connectionId) missing.push('connectionId');
   if (!database) missing.push('database');
-  if (!tables || !Array.isArray(tables) || tables.length === 0) missing.push('tables');
+  if (!Array.isArray(tables)) missing.push('tables');
   if (!question || !String(question).trim()) missing.push('question');
   if (!sql || !String(sql).trim()) missing.push('sql');
   if (missing.length > 0) {
     fail(res, `参数不完整，缺少: ${missing.join(', ')}`);
     return;
   }
-  const item = aiService.createHistory({ connectionId, database, tables, question, sql });
+  const item = aiService.createHistory({ connectionId, database, tables: tables || [], question, sql });
   success(res, item, '保存成功');
 }));
 
@@ -143,10 +143,11 @@ router.delete('/history', asyncHandler(async (_req: Request, res: Response) => {
 // 自然语言生成 SQL（SSE 流式）
 router.post('/generate', asyncHandler(async (req: Request, res: Response) => {
   const { connectionId, database, tables, question } = req.body;
-  if (!connectionId || !database || !tables?.length || !question) {
-    fail(res, 'connectionId、database、tables 和 question 参数必填');
+  if (!connectionId || !database || !question) {
+    fail(res, 'connectionId、database 和 question 参数必填');
     return;
   }
+  const tableList: string[] = Array.isArray(tables) ? tables : [];
 
   // 设置 SSE 响应头
   res.setHeader('Content-Type', 'text/event-stream');
@@ -161,7 +162,7 @@ router.post('/generate', asyncHandler(async (req: Request, res: Response) => {
 
   try {
     await aiService.generateSqlStream(
-      { connectionId, database, tables, question },
+      { connectionId, database, tables: tableList, question },
       sendSse
     );
   } catch (error: any) {

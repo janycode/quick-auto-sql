@@ -18,6 +18,12 @@
             <span v-if="workspaceStore.checkedTables.length > 0" style="color: #909399; font-size: 12px">
               (在左侧树中勾选表自动关联)
             </span>
+            <span v-else-if="workspaceStore.currentDatabase" style="color: #67c23a; font-size: 12px">
+              (未勾选，将使用数据库 [{{ workspaceStore.currentDatabase }}] 下的所有表)
+            </span>
+            <span v-else style="color: #e6a23c; font-size: 12px">
+              (请在左侧树中点击或展开一个数据库)
+            </span>
           </div>
           <el-button
             v-if="workspaceStore.checkedTables.length > 0"
@@ -30,6 +36,7 @@
           </el-button>
         </div>
         <TableSelector
+          v-if="workspaceStore.checkedTables.length > 0"
           :tables="workspaceStore.checkedTables"
           @remove="removeTable"
         />
@@ -70,6 +77,16 @@
             使用优化后的 SQL
           </el-button>
         </div>
+      </div>
+
+      <!-- 悬浮提示：有新内容需要滚动 -->
+      <div
+        v-if="showScrollHint"
+        class="scroll-hint"
+        @click="scrollPanelToBottomSmooth"
+      >
+        <el-icon class="scroll-hint-icon"><ArrowDown /></el-icon>
+        <span>滚动查看更新</span>
       </div>
     </div>
     <div class="ai-panel-footer">
@@ -194,7 +211,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy } from '@element-plus/icons-vue'
+import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy, ArrowDown } from '@element-plus/icons-vue'
 import hljs from 'highlight.js'
 import type { IAiHistory } from '@/api/ai'
 import TableSelector from './TableSelector.vue'
@@ -229,6 +246,8 @@ const generating = ref(false)
 const optimizing = ref(false)
 let abortController: AbortController | null = null
 const panelBody = ref<HTMLElement | null>(null)
+const showScrollHint = ref(false)
+let resizeObserver: ResizeObserver | null = null
 
 function scrollPanelToBottom() {
   nextTick(() => {
@@ -236,6 +255,23 @@ function scrollPanelToBottom() {
       panelBody.value.scrollTop = panelBody.value.scrollHeight
     }
   })
+}
+
+function scrollPanelToBottomSmooth() {
+  if (panelBody.value) {
+    panelBody.value.scrollTo({
+      top: panelBody.value.scrollHeight,
+      behavior: 'smooth'
+    })
+  }
+}
+
+function updateScrollHint() {
+  if (!panelBody.value) return
+  const el = panelBody.value
+  const needsScroll = el.scrollHeight > el.clientHeight + 4
+  const isNearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20
+  showScrollHint.value = needsScroll && !isNearBottom
 }
 
 // 动态加载提示
@@ -255,11 +291,38 @@ let hintTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
   // 组件挂载时启动 loading 计时器（当 generating 变化时由 watch 控制）
+  // 设置滚动监听 + ResizeObserver 检测内容变化
+  if (panelBody.value) {
+    panelBody.value.addEventListener('scroll', updateScrollHint, { passive: true })
+    // ResizeObserver 监听容器尺寸变化（窗口高度变化等）
+    resizeObserver = new ResizeObserver(() => {
+      updateScrollHint()
+    })
+    resizeObserver.observe(panelBody.value)
+    // 同时监听容器内 DOM 变化，以检测内容是否增多
+    const mo = new MutationObserver(() => {
+      nextTick(updateScrollHint)
+    })
+    mo.observe(panelBody.value, { childList: true, subtree: true, attributes: false, characterData: false })
+    // 存到 resizeObserver 便于统一清理
+    ;(resizeObserver as any)._mo = mo
+  }
+  nextTick(updateScrollHint)
 })
 
 onUnmounted(() => {
   if (loadingTimer) clearInterval(loadingTimer)
   if (hintTimer) clearInterval(hintTimer)
+  if (panelBody.value) {
+    panelBody.value.removeEventListener('scroll', updateScrollHint)
+  }
+  if (resizeObserver) {
+    try {
+      const mo = (resizeObserver as any)._mo
+      if (mo) mo.disconnect()
+    } catch (_) { /* ignore */ }
+    resizeObserver.disconnect()
+  }
 })
 
 // 监听 generating / optimizing 状态，切换加载提示
@@ -428,10 +491,6 @@ async function handleGenerate() {
     ElMessage.warning('请输入自然语言描述')
     return
   }
-  if (workspaceStore.checkedTables.length === 0) {
-    ElMessage.warning('请至少在左侧树中勾选一个表')
-    return
-  }
   if (!connectionStore.activeConnection) {
     ElMessage.warning('请先选择数据库连接')
     return
@@ -441,9 +500,16 @@ async function handleGenerate() {
     return
   }
 
-  const database = workspaceStore.checkedTables[0].database
+  const hasCheckedTables = workspaceStore.checkedTables.length > 0
+  let database: string
+  if (hasCheckedTables) {
+    database = workspaceStore.checkedTables[0].database
+  } else {
+    // 未勾选表时，使用当前激活的数据库（由后端拉取全库表）
+    database = workspaceStore.currentDatabase
+  }
   if (!database) {
-    ElMessage.warning('请先选择数据库')
+    ElMessage.warning('请先选择数据库（在左侧树点击或展开一个数据库）')
     return
   }
 
@@ -451,7 +517,9 @@ async function handleGenerate() {
   workspaceStore.setAiGeneratedSql('')
   workspaceStore.setAiOptimizedSql('')
 
-  const tableNames = workspaceStore.checkedTables.map((t: any) => t.table)
+  const tableNames = hasCheckedTables
+    ? workspaceStore.checkedTables.map((t: any) => t.table)
+    : []
   const connectionId = connectionStore.activeConnection.id
   const currentQuestion = question.value.trim()
 
@@ -580,9 +648,12 @@ async function handleOptimize() {
     ElMessage.warning('请先选择数据库连接')
     return
   }
-  const database = workspaceStore.checkedTables[0]?.database || connectionStore.activeConnection.database || ''
+  const database = workspaceStore.checkedTables[0]?.database
+    || workspaceStore.currentDatabase
+    || connectionStore.activeConnection.database
+    || ''
   if (!database) {
-    ElMessage.warning('请先选择数据库')
+    ElMessage.warning('请先选择数据库（在左侧树点击或展开一个数据库）')
     return
   }
   if (!aiStore.config.apiKey) {
@@ -593,7 +664,9 @@ async function handleOptimize() {
   optimizing.value = true
   workspaceStore.setAiOptimizedSql('')
 
-  const tableNames = workspaceStore.checkedTables.map((t: any) => t.table)
+  const tableNames = workspaceStore.checkedTables.length > 0
+    ? workspaceStore.checkedTables.map((t: any) => t.table)
+    : []
   const connectionId = connectionStore.activeConnection.id
   const originalSql = workspaceStore.aiGeneratedSql
 
@@ -700,6 +773,39 @@ defineExpose({ setCheckedTables })
     flex: 1;
     overflow-y: auto;
     padding: 16px;
+    position: relative;
+  }
+
+  .scroll-hint {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: 12px -16px -16px;
+    padding: 10px 16px;
+    background: linear-gradient(to top, rgba(245, 247, 250, 0.98), rgba(245, 247, 250, 0.9));
+    border-top: 1px solid #e4e7ed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #409eff;
+    cursor: pointer;
+    user-select: none;
+    z-index: 5;
+    transition: opacity 0.2s;
+
+    &:hover {
+      color: #66b1ff;
+      .scroll-hint-icon {
+        animation: bounceDown 0.8s ease-in-out infinite;
+      }
+    }
+
+    .scroll-hint-icon {
+      font-size: 14px;
+    }
   }
 
   .ai-panel-footer {
@@ -868,5 +974,10 @@ defineExpose({ setCheckedTables })
 
 @keyframes rotate {
   from { transform: rotate(0deg); } to { transform: rotate(360deg); }
+}
+
+@keyframes bounceDown {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
 }
 </style>

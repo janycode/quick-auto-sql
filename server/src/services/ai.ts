@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage, IPromptTemplate, IPromptTemplateType } from '../types';
 import { aiConfigStore, aiHistoryStore, readActiveAiConfig, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, listAnalysisCachePage, deleteAnalysisCacheById, clearAnalysisCache } from '../store/json-store';
-import { getTablesSchemaForAI } from './database';
+import { getTables, getTablesSchemaForAI } from './database';
 import { explainQuery } from './query';
 import { config } from '../config';
 
@@ -180,11 +180,18 @@ export async function generateSqlStream(
     throw new Error('请先在 AI 配置中添加并激活配置');
   }
 
+  // 若未指定表，则查询当前数据库的所有表
+  let tableList = request.tables;
+  if (!tableList || tableList.length === 0) {
+    const allTables = await getTables(request.connectionId, request.database);
+    tableList = allTables.map((t) => t.name);
+  }
+
   // 获取表结构
   const schema = await getTablesSchemaForAI(
     request.connectionId,
     request.database,
-    request.tables
+    tableList
   );
 
   const prompt = buildSqlPrompt(request.question, schema);
@@ -301,14 +308,19 @@ export async function optimizeSqlStream(
   onMessage({ type: 'thinking', content: '正在执行 EXPLAIN 分析执行计划...' });
   const explainRows = await explainQuery(request.connectionId, request.database, trimmedSql);
 
-  // 2. 如果提供了表名，则获取表结构信息
+  // 2. 获取表结构信息（若未指定则使用当前数据库的所有表）
   let schema: string | null = null;
-  if (request.tables && request.tables.length > 0) {
-    try {
-      schema = await getTablesSchemaForAI(request.connectionId, request.database, request.tables);
-    } catch {
-      schema = null;
+  try {
+    let tablesForSchema: string[] = [];
+    if (request.tables && request.tables.length > 0) {
+      tablesForSchema = request.tables;
+    } else {
+      const allTables = await getTables(request.connectionId, request.database);
+      tablesForSchema = allTables.map((t) => t.name);
     }
+    schema = await getTablesSchemaForAI(request.connectionId, request.database, tablesForSchema);
+  } catch {
+    schema = null;
   }
 
   // 3. 构造 prompt 并流式输出（analysis 为调用方传入的本次分析结论，可选）

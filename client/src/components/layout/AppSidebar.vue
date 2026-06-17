@@ -31,9 +31,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useConnectionStore } from '@/stores/connection'
+import { useWorkspaceStore } from '@/stores/workspace'
 import DbTree from '@/components/database/DbTree.vue'
 
 const emit = defineEmits<{
@@ -43,6 +44,7 @@ const emit = defineEmits<{
 }>()
 
 const connectionStore = useConnectionStore()
+const workspaceStore = useWorkspaceStore()
 const connections = computed(() => connectionStore.connections)
 const activeConnectionId = ref('')
 const dbTreeRef = ref()
@@ -56,7 +58,15 @@ watch(() => connectionStore.activeConnection, (conn) => {
 
 function handleConnectionChange(id: string) {
   const conn = connections.value.find(c => c.id === id)
-  if (conn) connectionStore.setActiveConnection(conn)
+  if (conn) {
+    connectionStore.setActiveConnection(conn)
+    // 切换连接时清空所有相关状态
+    workspaceStore.clearAll()
+    // 重新加载数据库列表
+    nextTick(() => {
+      dbTreeRef.value?.refresh()
+    })
+  }
 }
 
 function handleRefresh() {

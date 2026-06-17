@@ -592,6 +592,16 @@ onUnmounted(() => {
   document.removeEventListener('click', hideContextMenu)
 })
 
+// 监听连接 ID 变化，自动重新加载数据库列表
+watch(
+  () => props.connectionId,
+  async (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      await refresh()
+    }
+  }
+)
+
 // 恢复保存的勾选状态
 function restoreCheckedKeys() {
   const savedKeys = workspaceStore.checkedTableKeys
@@ -1109,6 +1119,9 @@ async function handleNodeClick(data: any) {
   if (data.type === 'search') {
     return
   }
+  if (data.type === 'database') {
+    workspaceStore.setCurrentDatabase(data.database)
+  }
   if (data.type === 'table') {
     emit('select-table', data.database, data.table)
   }
@@ -1324,7 +1337,10 @@ function handleNodeExpand(data: any) {
   if (data.key) {
     workspaceStore.addExpandedKey(data.key)
   }
-  // 展开时也确保隐藏非表节点的复选框
+  // 展开数据库节点时，自动将其设为当前激活数据库
+  if (data.type === 'database' && data.database) {
+    workspaceStore.setCurrentDatabase(data.database)
+  }
   nextTick(() => {
     hideNonTableCheckboxes()
   })
