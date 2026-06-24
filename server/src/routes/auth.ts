@@ -11,10 +11,13 @@ import {
   verifyEmailCodeFor,
   validateEmail,
   validatePassword,
+  getUserProfile,
+  updateUserProfile,
+  changePassword,
 } from '../services/auth';
 import { verifySmtpConfig } from '../services/email';
 import { config } from '../config';
-import { AuthRequest, extractToken } from '../middleware/auth';
+import { AuthRequest, extractToken, requireAuth } from '../middleware/auth';
 import type { ILoginRequest, IRegisterRequest, IEmailCodeRequest } from '../types';
 import { getQuotaInfo } from '../services/quota';
 
@@ -186,6 +189,64 @@ router.get('/me', asyncHandler(async (req: AuthRequest, res: Response) => {
     plan: quota.plan,
     quota,
   }, 'ok');
+}));
+
+// GET /api/auth/profile — 获取当前用户完整资料
+router.get('/profile', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    fail(res, '未登录', 401, 401);
+    return;
+  }
+  const profile = getUserProfile(userId);
+  if (!profile) {
+    fail(res, '用户不存在', 404, 404);
+    return;
+  }
+  success(res, profile, 'ok');
+}));
+
+// PUT /api/auth/profile — 更新个人资料（昵称、简介）
+router.put('/profile', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    fail(res, '未登录', 401, 401);
+    return;
+  }
+  const { nickname, bio } = req.body || {};
+  try {
+    const updated = updateUserProfile(userId, {
+      nickname: nickname !== undefined ? String(nickname) : undefined,
+      bio: bio !== undefined ? String(bio) : undefined,
+    });
+    if (!updated) {
+      fail(res, '用户不存在', 404, 404);
+      return;
+    }
+    success(res, updated, '资料更新成功');
+  } catch (e: any) {
+    fail(res, e?.message || '更新失败', 400, 400);
+  }
+}));
+
+// PUT /api/auth/password — 修改密码
+router.put('/password', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    fail(res, '未登录', 401, 401);
+    return;
+  }
+  const { oldPassword, newPassword } = req.body || {};
+  if (!oldPassword || !newPassword) {
+    fail(res, '原密码和新密码不能为空', 400, 400);
+    return;
+  }
+  try {
+    changePassword(userId, String(oldPassword), String(newPassword));
+    success(res, null, '密码修改成功');
+  } catch (e: any) {
+    fail(res, e?.message || '密码修改失败', 400, 400);
+  }
 }));
 
 export default router;

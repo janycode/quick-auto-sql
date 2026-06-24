@@ -48,6 +48,25 @@ export interface IMeResult {
   quota?: IQuotaInfo
 }
 
+export interface IUserProfile {
+  id: string
+  email?: string
+  username?: string
+  nickname?: string
+  avatar?: string
+  bio?: string
+  role: string
+  emailVerified: boolean
+  plan?: PlanType
+  planExpiresAt?: string
+  createdAt: string
+}
+
+export interface IUpdateProfileData {
+  nickname?: string
+  bio?: string
+}
+
 export function login(data: ILoginRequest) {
   // 登录请求静默错误处理：账号密码错误时，由登录页面自行提示
   // 避免全局 401 拦截器把它当成「会话失效」弹框并跳转
@@ -86,4 +105,19 @@ export function getQuotaInfo() {
 
 export function upgradePlan(plan: PlanType) {
   return request.post<any, { code: number; data: IQuotaInfo }>('/quota/upgrade', { plan })
+}
+
+export function getProfile() {
+  return request.get<any, { code: number; data: IUserProfile; message?: string }>('/auth/profile')
+}
+
+export function updateProfile(data: IUpdateProfileData) {
+  return request.put<any, { code: number; data: IUserProfile; message?: string }>('/auth/profile', data)
+}
+
+export function changePassword(oldPassword: string, newPassword: string) {
+  return request.put<any, { code: number; data: null; message?: string }>('/auth/password', {
+    oldPassword,
+    newPassword,
+  })
 }

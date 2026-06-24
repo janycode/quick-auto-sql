@@ -212,6 +212,9 @@ export interface IUser {
   plan?: PlanType;
   planExpiresAt?: string;
   trialUsed?: boolean;
+  nickname?: string;       // 昵称（展示用）
+  avatar?: string;         // 头像 URL
+  bio?: string;            // 个人简介
 }
 
 // 审计日志

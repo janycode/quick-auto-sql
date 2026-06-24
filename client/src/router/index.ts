@@ -61,6 +61,12 @@ const router = createRouter({
       meta: { title: '反馈管理' },
     },
     {
+      path: '/settings/profile',
+      name: 'Profile',
+      component: () => import('@/views/settings/Profile.vue'),
+      meta: { title: '个人中心' },
+    },
+    {
       path: '/payment',
       name: 'Payment',
       component: () => import('@/views/payment/Payment.vue'),

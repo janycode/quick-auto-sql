@@ -1,8 +1,36 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { config } from '../config';
+import type { IFeedback, FeedbackType } from '../types';
 
 let cachedTransporter: Transporter | null = null;
 let lastTransporterError: string | null = null;
+
+// ==================== 安全工具函数 ====================
+
+export function sanitizeEmailHeader(value: string): string {
+  if (!value) return '';
+  return String(value)
+    .replace(/[\r\n%0a%0d]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function escapeHtml(value: string): string {
+  if (!value) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+const FEEDBACK_TYPE_LABEL: Record<FeedbackType, string> = {
+  bug: 'Bug 反馈',
+  suggestion: '功能建议',
+  security: '安全问题',
+  other: '其他',
+};
 
 export interface SendResult {
   ok: boolean;
@@ -125,17 +153,19 @@ export async function verifySmtpConfig(): Promise<{ ok: boolean; reason?: string
  * 发送邮箱验证码。
  */
 export async function sendEmailCode(to: string, code: string, expiresSeconds = 600): Promise<SendResult> {
-  if (!to) return { ok: false, reason: '收件人邮箱为空' };
+  const safeTo = sanitizeEmailHeader(to);
+  if (!safeTo) return { ok: false, reason: '收件人邮箱为空' };
 
   const minutes = Math.round(expiresSeconds / 60);
-  const subject = '【Quick Auto SQL】邮箱验证码';
+  const subject = sanitizeEmailHeader('【Quick Auto SQL】邮箱验证码');
+  const safeCode = escapeHtml(code);
   const text = `您正在注册 Quick Auto SQL 账号，验证码为：${code}\n该验证码将在 ${minutes} 分钟后过期，请勿泄露给他人。`;
   const html = `
     <div style="font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 20px; color: #1f2a44;">
       <h2 style="margin:0 0 12px 0;">【Quick Auto SQL】邮箱验证码</h2>
       <p>您正在注册 Quick Auto SQL 账号，验证码为：</p>
       <div style="font-size:28px; letter-spacing:8px; font-weight:700; color:#2b6cff; padding:12px 18px; background:#f2f6ff; border-radius:8px; display:inline-block;">
-        ${code}
+        ${safeCode}
       </div>
       <p style="color:#6b7590; margin-top:16px;">该验证码将在 <b>${minutes}</b> 分钟后过期，请勿泄露给他人。</p>
       <p style="color:#a9b2c3; font-size:12px;">如果您并未发起此操作，请忽略本邮件。</p>
@@ -143,7 +173,7 @@ export async function sendEmailCode(to: string, code: string, expiresSeconds = 6
   `.trim();
 
   if (config.smtp.devMode) {
-    console.log(`\n[EMAIL DEV MODE] 发送邮箱验证码 to=<${to}>  code=${code}  expires=${minutes}分钟\n`);
+    console.log(`\n[EMAIL DEV MODE] 发送邮箱验证码 to=<${safeTo}>  code=${code}  expires=${minutes}分钟\n`);
     return { ok: true, devMode: true };
   }
 
@@ -157,7 +187,7 @@ export async function sendEmailCode(to: string, code: string, expiresSeconds = 6
   try {
     const info = await transporter.sendMail({
       from,
-      to,
+      to: safeTo,
       subject,
       text,
       html,
@@ -173,7 +203,7 @@ export async function sendEmailCode(to: string, code: string, expiresSeconds = 6
     const responseCode = typeof e?.responseCode === 'number' ? e.responseCode : undefined;
     const command = typeof e?.command === 'string' ? e.command : undefined;
 
-    console.error(`[EMAIL] 发送失败 to=<${to}>`, { message: msg, responseCode, command, response });
+    console.error(`[EMAIL] 发送失败 to=<${safeTo}>`, { message: msg, responseCode, command });
     // 让下次请求重建 transporter，避免卡在一个坏连接上
     resetTransporter();
 
@@ -193,6 +223,108 @@ export async function sendEmailCode(to: string, code: string, expiresSeconds = 6
     return {
       ok: false,
       reason: friendlyReason,
+      response,
+      responseCode,
+      command,
+    };
+  }
+}
+
+export async function sendFeedbackNotification(
+  feedback: IFeedback,
+  adminEmail: string,
+  baseUrl?: string,
+): Promise<SendResult> {
+  const safeTo = sanitizeEmailHeader(adminEmail);
+  if (!safeTo) return { ok: false, reason: 'admin 邮箱为空' };
+
+  const typeLabel = FEEDBACK_TYPE_LABEL[feedback.type] || feedback.type;
+  const subject = sanitizeEmailHeader(`【Quick Auto SQL】新的用户反馈 - ${typeLabel}`);
+
+  const safeDescription = escapeHtml(feedback.description);
+  const safeEmail = escapeHtml(feedback.email || '-');
+  const safeUsername = escapeHtml(feedback.username || '-');
+  const safeType = escapeHtml(typeLabel);
+  const safeCreatedAt = escapeHtml(feedback.createdAt);
+
+  const feedbackUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/settings/feedback` : '';
+  const safeFeedbackUrl = escapeHtml(feedbackUrl);
+
+  const text = `
+用户反馈类型：${typeLabel}
+反馈描述：${feedback.description}
+提交用户：${feedback.username || '-'}（${feedback.email || '-'}）
+提交时间：${feedback.createdAt}
+${feedbackUrl ? `查看反馈：${feedbackUrl}` : ''}
+  `.trim();
+
+  const html = `
+    <div style="font-family: -apple-system, Segoe UI, Arial, sans-serif; padding: 20px; color: #1f2a44;">
+      <h2 style="margin:0 0 16px 0;">新的用户反馈</h2>
+      <table style="width:100%; border-collapse:collapse; font-size:14px;">
+        <tr>
+          <td style="padding:8px 12px; background:#f5f7fa; width:100px; color:#6b7590;">反馈类型</td>
+          <td style="padding:8px 12px;">${safeType}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px; background:#f5f7fa; color:#6b7590;">提交用户</td>
+          <td style="padding:8px 12px;">${safeUsername}（${safeEmail}）</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px; background:#f5f7fa; color:#6b7590;">提交时间</td>
+          <td style="padding:8px 12px;">${safeCreatedAt}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px; background:#f5f7fa; color:#6b7590; vertical-align:top;">反馈描述</td>
+          <td style="padding:8px 12px; white-space:pre-wrap; word-break:break-word;">${safeDescription}</td>
+        </tr>
+      </table>
+      ${safeFeedbackUrl ? `
+      <div style="margin-top:20px;">
+        <a href="${safeFeedbackUrl}" style="display:inline-block; padding:10px 24px; background:#2b6cff; color:#fff; text-decoration:none; border-radius:6px;">查看并处理反馈</a>
+      </div>
+      ` : ''}
+      <p style="color:#a9b2c3; font-size:12px; margin-top:20px;">本邮件由系统自动发送，请勿直接回复。</p>
+    </div>
+  `.trim();
+
+  if (config.smtp.devMode) {
+    console.log(`\n[EMAIL DEV MODE] 发送反馈通知 to=<${safeTo}>  type=${feedback.type}\n`);
+    return { ok: true, devMode: true };
+  }
+
+  const transporter = await ensureTransporter();
+  if (!transporter) {
+    return { ok: false, reason: lastTransporterError || 'SMTP 未配置' };
+  }
+
+  const from = config.smtp.from || config.smtp.user;
+
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to: safeTo,
+      subject,
+      text,
+      html,
+    });
+
+    const testAccount = (transporter as any).__testAccount;
+    const previewUrl = testAccount ? nodemailer.getTestMessageUrl(info) || undefined : undefined;
+
+    return { ok: true, previewUrl };
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    const response = typeof e?.response === 'string' ? e.response : undefined;
+    const responseCode = typeof e?.responseCode === 'number' ? e.responseCode : undefined;
+    const command = typeof e?.command === 'string' ? e.command : undefined;
+
+    console.error(`[EMAIL] 反馈通知发送失败 to=<${safeTo}>`, { message: msg, responseCode, command });
+    resetTransporter();
+
+    return {
+      ok: false,
+      reason: msg,
       response,
       responseCode,
       command,
