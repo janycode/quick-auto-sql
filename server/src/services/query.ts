@@ -37,7 +37,8 @@ function wrapMySqlError(error: any): Error {
 export async function executeQuery(
   connectionId: string,
   database: string,
-  sql: string
+  sql: string,
+  userId?: string
 ): Promise<{
   columns: string[];
   columnComments: Record<string, string>;
@@ -45,8 +46,8 @@ export async function executeQuery(
   rowCount: number;
   executionTime: number
 }> {
-  const pool = getPoolById(connectionId);
-  if (!pool) throw new Error('连接不存在或未配置');
+  const pool = getPoolById(connectionId, userId);
+  if (!pool) throw new Error('连接不存在或无权限');
 
   const startTime = Date.now();
   let conn: mysql.PoolConnection | null = null;
@@ -222,14 +223,15 @@ export async function executeQuery(
   }
 }
 
-// 对 SQL 执行 EXPLAIN，返回原始行数组（每行为列名 -> 值）
+// 对 SQL 执行 EXPLAIN，返回原始行数组（每行为列名 -> 值；按用户校验归属）
 export async function explainQuery(
   connectionId: string,
   database: string,
-  sql: string
+  sql: string,
+  userId?: string
 ): Promise<Record<string, unknown>[]> {
-  const pool = getPoolById(connectionId);
-  if (!pool) throw new Error('连接不存在或未配置');
+  const pool = getPoolById(connectionId, userId);
+  if (!pool) throw new Error('连接不存在或无权限');
 
   let conn: mysql.PoolConnection | null = null;
   try {

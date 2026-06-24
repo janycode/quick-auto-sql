@@ -137,6 +137,42 @@
             <el-button size="small" @click="closeTableModal">×</el-button>
           </div>
           <div class="modal-body">
+            <!-- 表统计信息栏 -->
+            <div v-if="tableStatus" class="table-stats-bar">
+              <div class="stat-item">
+                <span class="stat-value">{{ formatNumber(tableStatus.rows) }}</span>
+                <span class="stat-label">数据行数</span>
+              </div>
+              <div class="stat-divider"></div>
+              <div class="stat-item">
+                <span class="stat-value">{{ tableStatus.columnCount }}</span>
+                <span class="stat-label">字段数</span>
+              </div>
+              <div class="stat-divider"></div>
+              <div class="stat-item">
+                <span class="stat-value">{{ tableStatus.indexCount }}</span>
+                <span class="stat-label">索引数</span>
+              </div>
+              <div class="stat-divider"></div>
+              <div class="stat-item">
+                <span class="stat-value">{{ tableStatus.engine || '-' }}</span>
+                <span class="stat-label">引擎</span>
+              </div>
+              <div class="stat-divider"></div>
+              <div class="stat-item">
+                <span class="stat-value">{{ formatBytes(tableStatus.dataLength) }}</span>
+                <span class="stat-label">数据大小</span>
+              </div>
+              <div class="stat-divider"></div>
+              <div class="stat-item">
+                <span class="stat-value">{{ formatCollation(tableStatus.collation) }}</span>
+                <span class="stat-label">字符集</span>
+              </div>
+            </div>
+            <div v-else-if="tableStatusLoading" class="table-stats-bar loading">
+              <span>加载统计信息中...</span>
+            </div>
+
             <!-- DDL 代码区域（可折叠） -->
             <div class="ddl-section">
               <div class="section-header" @click="toggleDdlCollapsed">
@@ -453,10 +489,12 @@ import {
 import { useDatabaseStore } from '@/stores/database'
 import { useWorkspaceStore } from '@/stores/workspace'
 import * as databaseApi from '@/api/database'
+import type { ITableStatus } from '@/api/database'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 import sql from 'highlight.js/lib/languages/sql'
 import * as queryApi from '@/api/query'
+import { formatSql } from '@/utils/sql-formatter'
 
 hljs.registerLanguage('sql', sql)
 
@@ -540,6 +578,8 @@ const currentTableInfo = ref({
   comment: '',
   ddl: ''
 })
+const tableStatus = ref<ITableStatus | null>(null)
+const tableStatusLoading = ref(false)
 const tableData = ref<{
   columns: string[]
   rows: Record<string, unknown>[]
@@ -1141,13 +1181,13 @@ async function handleNodeClick(data: any) {
 }
 
 async function showTableStructure(database: string, table: string, comment?: string) {
-  // 重置状态
   ddlCollapsed.value = false
   tableDataLoading.value = false
   tableDataError.value = ''
   tableData.value = { columns: [], rows: [] }
+  tableStatus.value = null
+  tableStatusLoading.value = true
 
-  // 获取表 DDL
   const ddlRes = await databaseApi.getTableDDL(props.connectionId, database, table)
   currentTableInfo.value = {
     database,
@@ -1156,7 +1196,17 @@ async function showTableStructure(database: string, table: string, comment?: str
     ddl: ddlRes.data || ''
   }
 
-  // 设置弹窗位置
+  databaseApi.getTableStatus(props.connectionId, database, table)
+    .then(res => {
+      tableStatus.value = res.data
+    })
+    .catch(() => {
+      tableStatus.value = null
+    })
+    .finally(() => {
+      tableStatusLoading.value = false
+    })
+
   const mouseX = (window.event as MouseEvent)?.clientX || 200
   const mouseY = (window.event as MouseEvent)?.clientY || 200
   const modalWidth = 900
@@ -1167,7 +1217,6 @@ async function showTableStructure(database: string, table: string, comment?: str
 
   showTableModal.value = true
 
-  // 异步加载数据
   loadTableData(database, table)
 }
 
@@ -1219,7 +1268,8 @@ function toggleDdlCollapsed() {
 function highlightDDL(ddl: string): string {
   if (!ddl) return ''
   try {
-    return hljs.highlight(ddl, { language: 'sql' }).value
+    const formatted = formatSql(ddl)
+    return hljs.highlight(formatted, { language: 'sql' }).value
   } catch (error) {
     console.error('SQL highlighting failed:', error)
     return ddl
@@ -1230,7 +1280,28 @@ function formatCellValue(value: unknown): string {
   if (value === null || value === undefined) {
     return ''
   }
-  if (typeof value === 'object') {
+  // 处理 Buffer 格式: {"type":"Buffer","data":[0]} -> "0"
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as any
+    if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+      // 单值 Buffer（如 tinyint）直接取 data[0]
+      if (obj.data.length === 1) {
+        return String(obj.data[0])
+      }
+      // 多值 Buffer 转换为字符串
+      if (obj.data.length > 0) {
+        try {
+          // 尝试将字节数组转换为字符串
+          const decoder = new TextDecoder('utf-8')
+          const str = decoder.decode(new Uint8Array(obj.data))
+          return str
+        } catch {
+          // 如果转换失败，则显示为逗号分隔的数值
+          return obj.data.join(', ')
+        }
+      }
+      return ''
+    }
     try {
       return JSON.stringify(value)
     } catch {
@@ -1241,6 +1312,27 @@ function formatCellValue(value: unknown): string {
     return value.toISOString()
   }
   return String(value)
+}
+
+function formatNumber(num: number | null | undefined): string {
+  if (num === null || num === undefined) return '-'
+  if (num >= 100000000) return (num / 100000000).toFixed(2) + '亿'
+  if (num >= 10000) return (num / 10000).toFixed(2) + '万'
+  return num.toLocaleString()
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '-'
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + ' ' + units[i]
+}
+
+function formatCollation(collation: string | null | undefined): string {
+  if (!collation) return '-'
+  const parts = collation.split('_')
+  return parts[0] || collation
 }
 
 function closeTableModal() {
@@ -1606,10 +1698,10 @@ defineExpose({
   width: 900px;
   max-width: 90vw;
   max-height: 90vh;
-  background: #fff;
+  background: var(--bg-primary);
   border-radius: 8px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--border-color);
   overflow-x: hidden;
   overflow-y: auto;
 
@@ -1618,17 +1710,17 @@ defineExpose({
     align-items: center;
     justify-content: space-between;
     padding: 12px 16px;
-    background: #f5f7fa;
-    border-bottom: 1px solid #e4e7ed;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
 
     .modal-title {
       font-weight: 600;
-      color: #303133;
+      color: var(--text-primary);
     }
 
     .modal-comment {
       font-weight: 400;
-      color: #909399;
+      color: var(--text-muted);
       font-size: 12px;
     }
 
@@ -1637,13 +1729,62 @@ defineExpose({
       width: 24px;
       height: 24px;
       line-height: 24px;
-      color: #909399;
+      color: var(--text-muted);
     }
   }
 
   .modal-body {
     overflow: auto;
     padding: 16px;
+  }
+
+  .table-stats-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    background: var(--bg-secondary, #f5f7fa);
+    border: 1px solid var(--border-color, #e4e7ed);
+    border-radius: 6px;
+
+    &.loading {
+      justify-content: center;
+      color: var(--text-muted, #909399);
+      font-size: 13px;
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+
+      .stat-value {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary, #303133);
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+
+      .stat-label {
+        font-size: 12px;
+        color: var(--text-muted, #909399);
+        margin-top: 2px;
+      }
+    }
+
+    .stat-divider {
+      width: 1px;
+      height: 32px;
+      background: var(--border-color, #e4e7ed);
+      flex-shrink: 0;
+    }
   }
 
   // 分区公共样式
@@ -1658,25 +1799,25 @@ defineExpose({
       display: flex;
       align-items: center;
       padding: 8px 10px;
-      background: #f5f7fa;
-      border: 1px solid #e4e7ed;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
       border-radius: 4px;
       cursor: pointer;
       user-select: none;
       font-size: 13px;
       font-weight: 600;
-      color: #303133;
+      color: var(--text-primary);
       margin-bottom: 10px;
       transition: background 0.2s;
 
       &:hover {
-        background: #eef0f3;
+        background: var(--border-color);
       }
 
       &.no-click {
         cursor: default;
         &:hover {
-          background: #f5f7fa;
+          background: var(--bg-tertiary);
         }
       }
 
@@ -1780,8 +1921,8 @@ defineExpose({
   position: fixed;
   z-index: 99999;
   min-width: 180px;
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
@@ -1794,11 +1935,11 @@ defineExpose({
   align-items: center;
   padding: 8px 16px;
   cursor: pointer;
-  color: #303133;
+  color: var(--text-primary);
   transition: background-color 0.2s;
 
   &:hover {
-    background-color: #ecf5ff;
+    background-color: var(--table-hover);
     color: #409eff;
   }
 

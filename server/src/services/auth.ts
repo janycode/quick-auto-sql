@@ -3,7 +3,9 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import SHA256 from 'crypto-js/sha256';
 import { config } from '../config';
-import type { IUser, IAuthSession } from '../types';
+import type { IUser, IAuthSession, IUserAiConfig } from '../types';
+// 注意：避免循环依赖（ai.ts 依赖本文件），这里直接硬编码默认配置 ID
+const DEFAULT_AI_CONFIG_ID = 'default-openrouter';
 import { sendEmailCode } from './email';
 
 const USERS_FILE = 'users.json';
@@ -79,8 +81,13 @@ function generateSixDigitCode(): string {
 /**
  * 获取用户在 JSON 中展示的 "账号名"：优先返回 email，其次返回 username。
  */
-function displayNameOf(user: IUser): string {
+export function displayNameOf(user: IUser): string {
   return user.email || user.username || '';
+}
+
+// 获取所有用户列表（用于跨用户的配置归属查询；仅 admin 能调用）
+export function getAllUsers(): IUser[] {
+  return readUsers();
 }
 
 // ==================== 邮箱 & 密码校验 ====================
@@ -128,15 +135,30 @@ function readUsers(): IUser[] {
   const filePath = getUsersFilePath();
   const data = readJson<{ users: IUser[] }>(filePath, { users: [] });
   if (!Array.isArray(data.users)) return [];
-  // 数据迁移：补齐 emailVerified 字段
+  // 数据迁移：补齐 emailVerified 和 aiConfigs 字段
+  // 默认配置为所有用户共享且默认为激活配置
+  const defaultAiConfigs: IUserAiConfig[] = [{ id: DEFAULT_AI_CONFIG_ID, state: 1 }];
   return data.users.map((u) => ({
     ...u,
     emailVerified: typeof u.emailVerified === 'boolean' ? u.emailVerified : false,
+    aiConfigs: Array.isArray(u.aiConfigs) && u.aiConfigs.length > 0 ? u.aiConfigs : defaultAiConfigs,
   }));
 }
 
 function writeUsers(users: IUser[]): void {
   writeJson(getUsersFilePath(), { users });
+}
+
+/**
+ * 更新指定用户的 aiConfigs 列表并写回文件
+ */
+export function updateUserAiConfigs(userId: string, aiConfigs: IUserAiConfig[]): boolean {
+  const users = readUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) return false;
+  users[idx].aiConfigs = aiConfigs;
+  writeUsers(users);
+  return true;
 }
 
 function ensureDefaultUser(): void {
@@ -147,10 +169,26 @@ function ensureDefaultUser(): void {
       username: DEFAULT_USERNAME,
       passwordHash: hashPassword(DEFAULT_PASSWORD),
       emailVerified: false,
+      role: 'admin',
+      plan: 'enterprise',
       createdAt: new Date().toISOString(),
+      aiConfigs: [{ id: DEFAULT_AI_CONFIG_ID, state: 1 }],
     });
     writeUsers(users);
   }
+  // 为旧用户补齐 role 和 plan 字段
+  let changed = false;
+  for (const user of users) {
+    if (!user.role) {
+      (user as any).role = user.username === DEFAULT_USERNAME ? 'admin' : 'editor';
+      changed = true;
+    }
+    if (user.username === DEFAULT_USERNAME && !user.plan) {
+      user.plan = 'enterprise';
+      changed = true;
+    }
+  }
+  if (changed) writeUsers(users);
 }
 
 // 首次启动时写入内置用户
@@ -173,6 +211,15 @@ export function findUserByIdentifier(identifier: string): IUser | undefined {
   if (byUsername) return byUsername;
 
   return undefined;
+}
+
+/**
+ * 按 ID 查找用户
+ */
+export function findUserById(userId: string): IUser | undefined {
+  if (!userId) return undefined;
+  const users = readUsers();
+  return users.find(u => u.id === userId);
 }
 
 /**
@@ -361,6 +408,18 @@ export interface ICreateUserResult {
   user: IUser;
 }
 
+/**
+ * 更新用户的任意字段（供配额/套餐等模块调用）
+ */
+export function updateUserField(userId: string, updates: Partial<IUser>): boolean {
+  const users = readUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) return false;
+  Object.assign(users[idx], updates);
+  writeUsers(users);
+  return true;
+}
+
 export function createUser(email: string, password: string): ICreateUserResult {
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -384,7 +443,9 @@ export function createUser(email: string, password: string): ICreateUserResult {
     email: normalizedEmail,
     passwordHash: hashPassword(password),
     emailVerified: true, // 通过验证码才到达这里，视为已验证
+    role: 'editor',
     createdAt: new Date().toISOString(),
+    aiConfigs: [{ id: DEFAULT_AI_CONFIG_ID, state: 1 }],
   };
   users.push(user);
   writeUsers(users);

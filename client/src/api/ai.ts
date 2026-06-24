@@ -7,6 +7,8 @@ export interface IAiConfig {
   apiUrl: string
   model: string
   createdAt: string
+  isDefault?: boolean        // 是否为内置默认配置
+  ownerName?: string         // 所属用户显示名（仅 admin 可见）
 }
 
 // AI 配置存储（含 activeId）
@@ -36,19 +38,19 @@ export function getActiveAiConfig() {
   return request.get<any, { code: number; data: IAiConfig | null }>('/ai/config')
 }
 
-// 新增 AI 配置
+// 新增 AI 配置（返回新增的配置对象）
 export function addAiConfig(data: { apiKey: string; apiUrl?: string; model?: string }) {
-  return request.post<any, { code: number; data: IAiConfigStoreData }>('/ai/configs', data)
+  return request.post<any, { code: number; data: IAiConfig }>('/ai/configs', data)
 }
 
-// 删除 AI 配置
+// 删除 AI 配置（删除成功返回 true）
 export function deleteAiConfig(id: string) {
-  return request.delete<any, { code: number; data: IAiConfigStoreData }>(`/ai/configs/${id}`)
+  return request.delete<any, { code: number; data: boolean }>(`/ai/configs/${id}`)
 }
 
-// 激活 AI 配置
+// 激活 AI 配置（激活成功返回 true）
 export function activateAiConfig(id: string) {
-  return request.post<any, { code: number; data: IAiConfigStoreData }>(`/ai/configs/${id}/activate`)
+  return request.post<any, { code: number; data: boolean }>(`/ai/configs/${id}/activate`)
 }
 
 // ==================== AI 历史对话 ====================
@@ -105,7 +107,9 @@ export function fetchAiModels(provider: string, apiKey: string, modelsUrl?: stri
 }
 
 // 测试 AI 配置连接（走后端代理，避免浏览器 CORS 问题）
-export function testAiConnection(data: { apiKey: string; apiUrl: string; model?: string }) {
+// - 测试默认配置：传 { configId: 'default-openrouter' }
+// - 测试自定义配置：传 { apiKey, apiUrl, model }
+export function testAiConnection(data: { apiKey?: string; apiUrl?: string; model?: string; configId?: string }) {
   return request.post<any, { code: number; data: { ok: true; status: number } }>('/ai/test', data)
 }
 

@@ -42,6 +42,29 @@
         />
       </div>
 
+      <!-- 对话历史 -->
+      <div v-if="workspaceStore.conversationMessages.length > 0" class="conversation-history">
+        <div class="conversation-header">
+          <span class="conversation-title">对话历史</span>
+          <el-button size="small" link type="danger" @click="handleClearConversation">
+            <el-icon><Delete /></el-icon>
+            清空
+          </el-button>
+        </div>
+        <div
+          v-for="(msg, idx) in workspaceStore.conversationMessages"
+          :key="idx"
+          class="conversation-message"
+          :class="msg.role"
+        >
+          <div class="message-role">{{ msg.role === 'user' ? '你' : 'AI' }}</div>
+          <div class="message-content">{{ msg.content }}</div>
+          <div v-if="msg.sql" class="message-sql">
+            <pre><code v-html="highlightSql(msg.sql)"></code></pre>
+          </div>
+        </div>
+      </div>
+
       <!-- AI 输出区域 -->
       <div v-if="workspaceStore.aiGeneratedSql || generating" class="ai-output">
         <div v-if="generating && !workspaceStore.aiGeneratedSql" class="ai-loading">
@@ -49,7 +72,12 @@
           <span class="loading-text">{{ loadingHint }}{{ loadingDots }}</span>
         </div>
         <div v-else class="ai-sql-output">
-          <div class="sql-label">原始 SQL</div>
+          <div class="sql-label">
+            原始 SQL
+            <el-tooltip content="复制 SQL" placement="top">
+              <el-icon class="copy-sql-icon" @click="handleCopySql(workspaceStore.aiGeneratedSql)"><DocumentCopy /></el-icon>
+            </el-tooltip>
+          </div>
           <pre><code v-html="highlightSql(workspaceStore.aiGeneratedSql)"></code></pre>
         </div>
         <div v-if="workspaceStore.aiGeneratedSql && !generating" class="ai-actions">
@@ -64,7 +92,12 @@
             <span class="loading-text">{{ optimizingHint }}{{ loadingDots }}</span>
           </div>
           <div v-else class="ai-sql-output optimized">
-            <div class="sql-label">优化后 SQL</div>
+            <div class="sql-label">
+              优化后 SQL
+              <el-tooltip content="复制 SQL" placement="top">
+                <el-icon class="copy-sql-icon" @click="handleCopySql(workspaceStore.aiOptimizedSql)"><DocumentCopy /></el-icon>
+              </el-tooltip>
+            </div>
             <pre><code v-html="highlightSql(workspaceStore.aiOptimizedSql)"></code></pre>
           </div>
           <el-button
@@ -76,6 +109,27 @@
           >
             使用优化后的 SQL
           </el-button>
+        </div>
+
+        <!-- SQL Diff 对比视图 -->
+        <div v-if="workspaceStore.aiGeneratedSql && workspaceStore.aiOptimizedSql && !generating && !optimizing" class="sql-diff-section">
+          <div class="sql-diff-header" @click="showDiff = !showDiff">
+            <span class="sql-diff-title">
+              <el-icon><Document /></el-icon>
+              SQL 对比
+            </span>
+            <el-icon class="diff-toggle" :class="{ expanded: showDiff }"><ArrowDown /></el-icon>
+          </div>
+          <div v-if="showDiff" class="sql-diff-content">
+            <div class="diff-side">
+              <div class="diff-label">原始</div>
+              <pre class="diff-code original"><code>{{ workspaceStore.aiGeneratedSql }}</code></pre>
+            </div>
+            <div class="diff-side">
+              <div class="diff-label">优化后</div>
+              <pre class="diff-code optimized"><code>{{ workspaceStore.aiOptimizedSql }}</code></pre>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -211,13 +265,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy, ArrowDown } from '@element-plus/icons-vue'
+import { ChatDotRound, Promotion, Loading, Clock, Search, Delete, DocumentCopy, ArrowDown, Document } from '@element-plus/icons-vue'
 import hljs from 'highlight.js'
 import type { IAiHistory } from '@/api/ai'
 import TableSelector from './TableSelector.vue'
 import { useAiStore } from '@/stores/ai'
 import { useConnectionStore } from '@/stores/connection'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useUserStore } from '@/stores/user'
 import { fetchSSE } from '@/utils/sse'
 import { formatSql } from '@/utils/sql-formatter'
 import dayjs from 'dayjs'
@@ -236,14 +291,16 @@ const emit = defineEmits<{
 const aiStore = useAiStore()
 const connectionStore = useConnectionStore()
 const workspaceStore = useWorkspaceStore()
+const userStore = useUserStore()
 
 // question 绑定到 workspace store 的 aiQuestion
 const question = computed({
   get: () => workspaceStore.aiQuestion,
   set: (v: string) => workspaceStore.setAiQuestion(v),
 })
-const generating = ref(false)
-const optimizing = ref(false)
+const generating = computed(() => workspaceStore.aiGenerating)
+const optimizing = computed(() => workspaceStore.aiOptimizing)
+const showDiff = ref(false)
 let abortController: AbortController | null = null
 const panelBody = ref<HTMLElement | null>(null)
 const showScrollHint = ref(false)
@@ -405,6 +462,12 @@ function handleClear() {
   emit('clear-tables')
 }
 
+function handleClearConversation() {
+  workspaceStore.clearConversation()
+  workspaceStore.setAiGeneratedSql('')
+  workspaceStore.setAiOptimizedSql('')
+}
+
 async function handleOpenHistory() {
   showHistoryModal.value = true
   historyPage.value = 1
@@ -495,7 +558,7 @@ async function handleGenerate() {
     ElMessage.warning('请先选择数据库连接')
     return
   }
-  if (!aiStore.config.apiKey) {
+  if (!aiStore.config.id) {
     ElMessage.warning('请先配置 AI API Key')
     return
   }
@@ -513,7 +576,7 @@ async function handleGenerate() {
     return
   }
 
-  generating.value = true
+  workspaceStore.setAiGenerating(true)
   workspaceStore.setAiGeneratedSql('')
   workspaceStore.setAiOptimizedSql('')
 
@@ -536,6 +599,7 @@ async function handleGenerate() {
         database,
         tables: tableNames,
         question: currentQuestion,
+        messages: workspaceStore.getConversationForAI(),
       }, {
         onMessage: (data: any) => {
           if (data.type === 'thinking') {
@@ -594,7 +658,7 @@ async function handleGenerate() {
     if (isFatal) {
       // 不可恢复的错误：直接展示给用户，不重试
       ElMessage.error(cleanMsg)
-      generating.value = false
+      workspaceStore.setAiGenerating(false)
       console.error('[AI] 不可恢复错误:', cleanMsg)
       return
     }
@@ -606,15 +670,16 @@ async function handleGenerate() {
     } catch (secondError: any) {
       const secondMsg = secondError?.message || ''
       ElMessage.error(`AI 生成失败：${secondMsg.replace(/^FATAL:/, '') || firstErrorMessage.replace(/^FATAL:/, '')}`)
-      generating.value = false
+      workspaceStore.setAiGenerating(false)
       console.error('[AI] 两次请求均失败，首次错误:', firstErrorMessage, '; 二次错误:', secondMsg)
       return
     }
   }
 
-  // 成功：保存历史
-  generating.value = false
+  // 成功：保存历史并添加对话消息
+  workspaceStore.setAiGenerating(false)
   if (result && result.trim()) {
+    userStore.fetchQuota().catch(() => {})
     aiStore.addHistory({
       connectionId,
       database,
@@ -624,6 +689,38 @@ async function handleGenerate() {
     }).catch(err => {
       console.error('保存历史失败:', err)
     })
+
+    // 添加到对话历史
+    workspaceStore.addConversationMessage({
+      role: 'user',
+      content: currentQuestion,
+      timestamp: Date.now(),
+    })
+    workspaceStore.addConversationMessage({
+      role: 'assistant',
+      content: `已生成 SQL`,
+      sql: result,
+      timestamp: Date.now(),
+    })
+  }
+}
+
+async function handleCopySql(sql: string) {
+  if (!sql) return
+  try {
+    await navigator.clipboard.writeText(sql)
+    ElMessage.success('SQL 已复制到剪贴板')
+  } catch {
+    // 降级方案
+    const textarea = document.createElement('textarea')
+    textarea.value = sql
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    ElMessage.success('SQL 已复制到剪贴板')
   }
 }
 
@@ -656,12 +753,12 @@ async function handleOptimize() {
     ElMessage.warning('请先选择数据库（在左侧树点击或展开一个数据库）')
     return
   }
-  if (!aiStore.config.apiKey) {
+  if (!aiStore.config.id) {
     ElMessage.warning('请先配置 AI API Key')
     return
   }
 
-  optimizing.value = true
+  workspaceStore.setAiOptimizing(true)
   workspaceStore.setAiOptimizedSql('')
 
   const tableNames = workspaceStore.checkedTables.length > 0
@@ -727,9 +824,21 @@ async function handleOptimize() {
 
   try {
     const result = await callOptimizeOnce()
-    optimizing.value = false
+    workspaceStore.setAiOptimizing(false)
     if (result && result.trim()) {
+      userStore.fetchQuota().catch(() => {})
       scrollPanelToBottom()
+      workspaceStore.addConversationMessage({
+        role: 'user',
+        content: `[优化 SQL] ${originalSql.slice(0, 60)}...`,
+        timestamp: Date.now(),
+      })
+      workspaceStore.addConversationMessage({
+        role: 'assistant',
+        content: '优化后的 SQL',
+        sql: result,
+        timestamp: Date.now(),
+      })
       aiStore.addHistory({
         connectionId,
         database,
@@ -741,7 +850,7 @@ async function handleOptimize() {
       })
     }
   } catch (err: any) {
-    optimizing.value = false
+    workspaceStore.setAiOptimizing(false)
     const msg = (err?.message || '').replace(/^FATAL:/, '')
     ElMessage.error(`AI 优化失败：${msg || '未知错误'}`)
     console.error('[AI] 优化SQL失败:', msg)
@@ -754,15 +863,15 @@ defineExpose({ setCheckedTables })
 <style scoped lang="scss">
 .ai-panel {
   width: 380px;
-  border-left: 1px solid #e4e7ed;
+  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  background: #fafafa;
+  background: var(--ai-panel-bg);
 
   .ai-panel-header {
     padding: 12px 16px;
-    border-bottom: 1px solid #e4e7ed;
+    border-bottom: 1px solid var(--border-color);
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -783,8 +892,8 @@ defineExpose({ setCheckedTables })
     right: 0;
     margin: 12px -16px -16px;
     padding: 10px 16px;
-    background: linear-gradient(to top, rgba(245, 247, 250, 0.98), rgba(245, 247, 250, 0.9));
-    border-top: 1px solid #e4e7ed;
+    background: linear-gradient(to top, var(--ai-panel-bg), var(--ai-panel-bg));
+    border-top: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -810,7 +919,7 @@ defineExpose({ setCheckedTables })
 
   .ai-panel-footer {
     padding: 12px;
-    border-top: 1px solid #e4e7ed;
+    border-top: 1px solid var(--border-color);
 
     :deep(.ai-question-input .el-textarea__inner) {
       height: 100px !important;
@@ -827,7 +936,82 @@ defineExpose({ setCheckedTables })
 
   .table-title {
     font-size: 13px;
-    color: #606266;
+    color: var(--text-secondary);
+  }
+}
+
+.conversation-history {
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+
+  .conversation-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+
+    .conversation-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+  }
+
+  .conversation-message {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &.user {
+      background: var(--bg-primary);
+    }
+
+    &.assistant {
+      background: var(--bg-tertiary);
+    }
+
+    .message-role {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .message-content {
+      font-size: 13px;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+
+    .message-sql {
+      margin-top: 8px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 8px;
+      overflow-x: auto;
+
+      pre {
+        margin: 0;
+        background: transparent;
+      }
+
+      code {
+        font-family: 'Consolas', 'Monaco', monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+    }
   }
 }
 
@@ -839,9 +1023,9 @@ defineExpose({ setCheckedTables })
     align-items: center;
     gap: 8px;
     padding: 16px 12px;
-    color: #909399;
+    color: var(--text-muted);
     font-size: 13px;
-    background: #f5f7fa;
+    background: var(--bg-tertiary);
     border-radius: 4px;
 
     .is-loading {
@@ -851,7 +1035,7 @@ defineExpose({ setCheckedTables })
   }
 
   .ai-sql-output {
-    background: #f5f7fa;
+    background: var(--bg-tertiary);
     padding: 12px;
     border-radius: 4px;
     overflow-x: auto;
@@ -861,7 +1045,7 @@ defineExpose({ setCheckedTables })
       font-family: 'Consolas', 'Monaco', monospace;
       font-size: 13px;
       line-height: 1.6;
-      color: #333;
+      color: var(--text-primary);
       background: transparent;
       white-space: pre-wrap;
       word-break: break-all;
@@ -876,15 +1060,28 @@ defineExpose({ setCheckedTables })
     }
 
     .sql-label {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-size: 11px;
       font-weight: 600;
-      color: #606266;
+      color: var(--text-secondary);
       padding: 2px 8px;
-      background: #fff;
-      border: 1px solid #dcdfe6;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
       border-radius: 3px;
       margin-bottom: 8px;
+
+      .copy-sql-icon {
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--text-muted);
+        transition: color 0.2s;
+
+        &:hover {
+          color: #409eff;
+        }
+      }
     }
   }
 
@@ -901,7 +1098,96 @@ defineExpose({ setCheckedTables })
   .ai-optimized-output {
     margin-top: 12px;
     padding-top: 12px;
-    border-top: 1px dashed #dcdfe6;
+    border-top: 1px dashed var(--border-color);
+  }
+
+  .sql-diff-section {
+    margin-top: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+
+    .sql-diff-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      cursor: pointer;
+      user-select: none;
+
+      &:hover {
+        background: var(--border-color);
+      }
+
+      .sql-diff-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+
+      .diff-toggle {
+        transition: transform 0.2s;
+        color: var(--text-muted);
+
+        &.expanded {
+          transform: rotate(180deg);
+        }
+      }
+    }
+
+    .sql-diff-content {
+      display: flex;
+      gap: 0;
+      border-top: 1px solid var(--border-color);
+
+      .diff-side {
+        flex: 1;
+        min-width: 0;
+
+        &:first-child {
+          border-right: 1px solid var(--border-color);
+        }
+
+        .diff-label {
+          padding: 4px 8px;
+          font-size: 10px;
+          font-weight: 600;
+          color: var(--text-muted);
+          background: var(--bg-primary);
+          border-bottom: 1px solid var(--border-color);
+          text-transform: uppercase;
+        }
+
+        .diff-code {
+          margin: 0;
+          padding: 8px;
+          font-size: 11px;
+          line-height: 1.5;
+          overflow-x: auto;
+          max-height: 200px;
+          background: var(--bg-primary);
+
+          code {
+            font-family: 'Consolas', 'Monaco', monospace;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-all;
+          }
+
+          &.original {
+            background: var(--bg-primary);
+          }
+
+          &.optimized {
+            background: #f0f9eb;
+          }
+        }
+      }
+    }
   }
 }
 
@@ -922,10 +1208,10 @@ defineExpose({ setCheckedTables })
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--border-color);
 
   &:last-child { border-bottom: none; }
-  &:hover { background-color: #f5f7fa; }
+  &:hover { background-color: var(--bg-tertiary); }
 }
 
 .history-index {
@@ -933,20 +1219,20 @@ defineExpose({ setCheckedTables })
   width: 32px;
   text-align: center;
   font-size: 12px;
-  color: #909399;
+  color: var(--text-muted);
   font-family: Consolas, Monaco, monospace;
   font-weight: 500;
 }
 
 .history-content { flex: 1; overflow: hidden; min-width: 0; }
 .history-question-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.copy-question-icon { font-size: 14px; color: #909399; cursor: pointer; &:hover { color: #409eff; } }
+.copy-question-icon { font-size: 14px; color: var(--text-muted); cursor: pointer; &:hover { color: #409eff; } }
 .history-question {
-  font-size: 13px; color: #303133; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; flex: 1; min-width: 0;
 }
-.history-meta { font-size: 12px; color: #909399; display: flex; align-items: center; gap: 6px; }
-.meta-divider { color: #c0c4cc; }
+.history-meta { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.meta-divider { color: var(--text-muted); }
 
 .history-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .history-empty { padding: 24px 0; }
@@ -955,13 +1241,13 @@ defineExpose({ setCheckedTables })
   display: flex;
   justify-content: center;
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--border-color);
   margin-top: 8px;
 }
 
 .sql-preview-code {
-  margin: 0; padding: 0; border: 1px solid #e8e8e8; border-radius: 4px;
-  overflow: hidden; background: #fff;
+  margin: 0; padding: 0; border: 1px solid var(--border-color); border-radius: 4px;
+  overflow: hidden; background: var(--bg-primary);
 
   :deep(code) {
     display: block; padding: 16px;
@@ -969,6 +1255,7 @@ defineExpose({ setCheckedTables })
     font-size: 13px; line-height: 1.6; white-space: pre-wrap !important;
     word-wrap: break-word !important; overflow-wrap: break-word !important;
     max-height: 400px; overflow-y: auto;
+    color: var(--text-primary);
   }
 }
 

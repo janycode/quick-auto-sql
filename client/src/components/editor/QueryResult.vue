@@ -11,10 +11,31 @@
     <template v-if="result">
       <div class="result-toolbar">
         <span>查询结果: {{ result.rowCount }} 行</span>
+        <span v-if="hasFilter">（筛选后 {{ sortedFilteredRows.length }} 行）</span>
         <span>耗时: {{ result.executionTime }}ms</span>
         <div style="flex: 1" />
+        <el-input
+          v-if="result.rows.length > 0"
+          v-model="filterText"
+          placeholder="筛选行..."
+          size="small"
+          clearable
+          style="width: 180px"
+          :prefix-icon="Search"
+        />
         <el-button size="small" link @click="handleResizeReset">重置高度</el-button>
-        <el-button size="small" link @click="handleExport">导出 CSV</el-button>
+        <el-dropdown trigger="click" size="small">
+          <el-button size="small" link>
+            导出 <el-icon style="margin-left: 2px"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="handleExportXlsx">导出 .xlsx</el-dropdown-item>
+              <el-dropdown-item @click="handleExportCsv">导出 .csv</el-dropdown-item>
+              <el-dropdown-item @click="handleExportJson">导出 .json</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button size="small" :type="showComments ? 'primary' : 'default'" @click="toggleShowComments">
           列备注
         </el-button>
@@ -22,10 +43,12 @@
       <div class="result-table-wrapper" v-show="ready">
         <el-table
           :key="`table-${showComments}`"
-          :data="result.rows"
+          :data="sortedFilteredRows"
           stripe
           border
           size="small"
+          height="100%"
+          @sort-change="handleSortChange"
         >
           <el-table-column
             type="index"
@@ -38,6 +61,8 @@
             :key="`col-${col}-${showComments}`"
             :prop="col"
             :label="getColumnLabel(col)"
+            :sortable="'custom'"
+            :sort-orders="['ascending', 'descending', null]"
             width="130"
             show-overflow-tooltip
             :header-cell-class-name="getColumnComment(col) ? 'has-comment' : ''"
@@ -70,7 +95,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { Search, ArrowDown } from '@element-plus/icons-vue'
+import * as XLSX from 'xlsx'
 import type { IQueryResult } from '@/api/query'
 
 declare const Buffer: any
@@ -83,9 +110,54 @@ const resultAreaRef = ref<HTMLElement>()
 const resultHeight = ref(400)
 const showComments = ref(false)
 const ready = ref(false)
+const filterText = ref('')
+const sortColumn = ref('')
+const sortDirection = ref<'ascending' | 'descending' | ''>('')
 const DEFAULT_HEIGHT = 400
 const MIN_HEIGHT = 120
 const MAX_HEIGHT = 1200
+
+const hasFilter = computed(() => {
+  return !!filterText.value.trim() || !!sortColumn.value
+})
+
+const sortedFilteredRows = computed(() => {
+  if (!props.result) return []
+  let rows = [...props.result.rows]
+
+  // 筛选
+  const kw = filterText.value.trim().toLowerCase()
+  if (kw) {
+    rows = rows.filter(row => {
+      return props.result!.columns.some(col => {
+        const val = row[col]
+        if (val === null || val === undefined) return false
+        return String(val).toLowerCase().includes(kw)
+      })
+    })
+  }
+
+  // 排序
+  if (sortColumn.value && sortDirection.value) {
+    const col = sortColumn.value
+    const dir = sortDirection.value === 'ascending' ? 1 : -1
+    rows.sort((a, b) => {
+      const va = a[col]
+      const vb = b[col]
+      if (va === null || va === undefined) return 1
+      if (vb === null || vb === undefined) return -1
+      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
+      return String(va).localeCompare(String(vb)) * dir
+    })
+  }
+
+  return rows
+})
+
+function handleSortChange({ prop, order }: { prop: string | null; order: 'ascending' | 'descending' | null }) {
+  sortColumn.value = prop || ''
+  sortDirection.value = order || ''
+}
 
 function removeNewlines(str: string): string {
   return str.replace(/[\r\n]+/g, ' ').trim();
@@ -94,7 +166,6 @@ function removeNewlines(str: string): string {
 function getColumnLabel(col: string): string {
   if (showComments.value && props.result?.columnComments[col]) {
     const fullComment = removeNewlines(props.result.columnComments[col]);
-    // 如果包含冒号，按第一个冒号截断，保留左侧
     const enColon = fullComment.indexOf(':');
     const cnColon = fullComment.indexOf('\uff1a');
     const candidates = [enColon, cnColon].filter(i => i >= 0);
@@ -102,7 +173,6 @@ function getColumnLabel(col: string): string {
     if (colonIndex > 0) {
       return fullComment.substring(0, colonIndex).trim();
     }
-    // 没有冒号，返回完整注释（Element Plus 的 show-overflow-tooltip 会自动添加省略号）
     return fullComment;
   }
   return removeNewlines(col);
@@ -114,12 +184,6 @@ function getColumnComment(col: string): string {
   return removeNewlines(comment);
 }
 
-/**
- * 将 Buffer/字节数组格式化展示
- * - 单个字节：直接显示数字值（如 [0] -> "0"）
- * - 可打印文本：显示字符串
- * - 其他：显示十六进制
- */
 function formatBufferBytes(buf: { toString: (encoding?: string) => string; length: number }): string {
   if (buf.length === 0) return '';
   if (buf.length === 1) {
@@ -133,85 +197,35 @@ function formatBufferBytes(buf: { toString: (encoding?: string) => string; lengt
   return hex.length > 64 ? hex.slice(0, 64) + '...' : hex;
 }
 
-/**
- * 格式化单元格值，支持各种 MySQL 字段类型
- * - null/undefined: 空字符串
- * - Date: YYYY-MM-DD HH:mm:ss
- * - Buffer: 尝试 UTF-8 解码，失败则显示 hex
- * - 对象/数组: JSON 序列化（压缩空白）
- * - BigInt: 转字符串
- * - 其他: String()
- */
 function formatCellValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
+  if (value === null || value === undefined) return '';
 
-  // Date 类型（MySQL 的 DATETIME/TIMESTAMP 在 mysql2 驱动中默认是 Date 对象）
   if (value instanceof Date) {
     if (isNaN(value.getTime())) return '';
     const pad = (n: number) => n.toString().padStart(2, '0');
     return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
   }
 
-  // Buffer 类型（BLOB、BINARY、VARBINARY 等）
   if (typeof Buffer !== 'undefined' && value instanceof Buffer) {
     return formatBufferBytes(value as any);
   }
 
-  // JSON 序列化后的 Buffer 对象：{"type":"Buffer","data":[0,1,...]}
-  // 通过 HTTP API 返回时，Node.js 的 Buffer 会被 JSON.stringify 序列化成这种结构
-  if (
-    value &&
-    typeof value === 'object' &&
-    (value as any).type === 'Buffer' &&
-    Array.isArray((value as any).data)
-  ) {
+  if (value && typeof value === 'object' && (value as any).type === 'Buffer' && Array.isArray((value as any).data)) {
     const bytes = (value as any).data as number[];
     if (bytes.length === 0) return '';
-    if (typeof Buffer !== 'undefined') {
-      return formatBufferBytes(Buffer.from(bytes));
-    }
-    // 浏览器环境，手动处理：单个字节直接显示数字；否则尝试文本或 hex
-    if (bytes.length === 1) {
-      return bytes[0].toString();
-    }
-    // 尝试当作 UTF-8 文本
+    if (typeof Buffer !== 'undefined') return formatBufferBytes(Buffer.from(bytes));
+    if (bytes.length === 1) return bytes[0].toString();
     try {
       const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
-      if (!text.includes('\u0000') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(text)) {
-        return text;
-      }
-    } catch {
-      // 忽略，回落到 hex
-    }
+      if (!text.includes('\u0000') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(text)) return text;
+    } catch {}
     const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
     return hex.length > 64 ? hex.slice(0, 64) + '...' : hex;
   }
 
-  // BigInt 类型
-  if (typeof value === 'bigint') {
-    return value.toString();
-  }
-
-  // 数组类型
-  if (Array.isArray(value)) {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return '[Array]';
-    }
-  }
-
-  // 普通对象（MySQL JSON 字段、geometry 等）
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return '[Object]';
-    }
-  }
-
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) { try { return JSON.stringify(value); } catch { return '[Array]'; } }
+  if (typeof value === 'object') { try { return JSON.stringify(value); } catch { return '[Object]'; } }
   return removeNewlines(String(value));
 }
 
@@ -219,20 +233,13 @@ function toggleShowComments() {
   showComments.value = !showComments.value
 }
 
-/**
- * 拖动调整高度
- * 核心优化：拖动过程中直接操作 DOM 元素的 style.height，绕过 Vue 响应式，
- * 拖动结束后才同步到响应式变量和 localStorage，实现极致跟手体验
- */
 function handleResizeStart(e: MouseEvent) {
   if (!resultAreaRef.value) return
-
   const el = resultAreaRef.value
   const startY = e.clientY
-  const startHeight = el.offsetHeight // 使用实时 DOM 高度作为基准
+  const startHeight = el.offsetHeight
   let currentHeight = startHeight
 
-  // 拖动时直接写 DOM，零延迟
   const onMouseMove = (ev: MouseEvent) => {
     const delta = startY - ev.clientY
     const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta))
@@ -247,7 +254,6 @@ function handleResizeStart(e: MouseEvent) {
     document.removeEventListener('mouseup', onMouseUp)
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
-    // 拖动结束再同步到响应式变量
     resultHeight.value = currentHeight
     localStorage.setItem('queryResultHeight', String(currentHeight))
   }
@@ -263,11 +269,21 @@ function handleResizeReset() {
   localStorage.setItem('queryResultHeight', String(DEFAULT_HEIGHT))
 }
 
-function handleExport() {
+function downloadFile(content: string | ArrayBuffer | Blob, filename: string, mimeType: string) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function handleExportCsv() {
   if (!props.result || !props.result.rows.length) return
 
   const headers = props.result.columns.map(col => getColumnLabel(col));
-  const rows = props.result.rows.map(row =>
+  const rows = sortedFilteredRows.value.map(row =>
     props.result!.columns.map(col => {
       const val = formatCellValue(row[col]);
       return val.includes(',') || val.includes('"') || val.includes('\n')
@@ -276,15 +292,46 @@ function handleExport() {
     }).join(',')
   );
   const csv = [headers, ...rows].join('\n');
-
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `query_result_${Date.now()}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadFile('\uFEFF' + csv, `query_result_${Date.now()}.csv`, 'text/csv;charset=utf-8;')
 }
+
+function handleExportJson() {
+  if (!props.result || !props.result.rows.length) return
+
+  const exportData = sortedFilteredRows.value.map(row => {
+    const obj: Record<string, unknown> = {}
+    for (const col of props.result!.columns) {
+      obj[col] = row[col]
+    }
+    return obj
+  })
+  const json = JSON.stringify(exportData, null, 2)
+  downloadFile(json, `query_result_${Date.now()}.json`, 'application/json;charset=utf-8;')
+}
+
+function handleExportXlsx() {
+  if (!props.result || !props.result.rows.length) return
+
+  const headers = props.result.columns.map(col => getColumnLabel(col));
+  const rows = sortedFilteredRows.value.map(row =>
+    props.result!.columns.map(col => formatCellValue(row[col]))
+  );
+  const aoa = [headers, ...rows];
+
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Query Result');
+
+  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  downloadFile(wbout, `query_result_${Date.now()}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+}
+
+// 重置排序和筛选当结果变化时
+watch(() => props.result, () => {
+  filterText.value = ''
+  sortColumn.value = ''
+  sortDirection.value = ''
+})
 
 onMounted(() => {
   const savedHeight = localStorage.getItem('queryResultHeight')
@@ -305,16 +352,14 @@ onUnmounted(() => {
 
 <style scoped lang="scss">
 .result-area {
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   overflow: hidden;
-  /* 移除所有过渡动画 */
   transition: none !important;
   animation: none !important;
 
-  /* 强制覆盖 element-plus 表格内部动画 */
   :deep(*) {
     transition: none !important;
     animation: none !important;
@@ -325,26 +370,18 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f0f1f2;
+    background: var(--bg-tertiary);
     cursor: ns-resize;
     flex-shrink: 0;
-    border-bottom: 1px solid #e4e7ed;
+    border-bottom: 1px solid var(--border-color);
     user-select: none;
     transition: none !important;
     animation: none !important;
 
-    &:hover {
-      background: #e6f7ff;
-    }
-
-    &:active {
-      background: #409eff;
-    }
-
+    &:hover { background: #e6f7ff; }
+    &:active { background: #409eff; }
     &:hover .resize-icon .resize-dot,
-    &:active .resize-icon .resize-dot {
-      background: #409eff;
-    }
+    &:active .resize-icon .resize-dot { background: #409eff; }
 
     .resize-icon {
       display: flex;
@@ -356,7 +393,7 @@ onUnmounted(() => {
       .resize-dot {
         width: 4px;
         height: 4px;
-        background: #c0c4cc;
+        background: var(--scrollbar-thumb);
         border-radius: 50%;
       }
     }
@@ -364,24 +401,21 @@ onUnmounted(() => {
 
   .result-toolbar {
     padding: 8px 12px;
-    border-bottom: 1px solid #e4e7ed;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     gap: 12px;
     font-size: 12px;
-    color: #606266;
+    color: var(--text-secondary);
     flex-shrink: 0;
   }
 
   .result-table-wrapper {
     flex: 1;
     min-height: 0;
-    overflow: auto;
 
     :deep(.el-table) {
       font-size: 11px;
-      width: max-content;
-      min-width: 100%;
     }
 
     :deep(.el-table__header) {
@@ -392,12 +426,16 @@ onUnmounted(() => {
     :deep(.el-table__header .el-table__cell) {
       min-height: 28px;
       white-space: nowrap;
+      overflow: visible;
     }
 
     :deep(.el-table__header .cell) {
-      display: inline-block;
-      vertical-align: middle;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
       line-height: normal;
+      gap: 4px;
     }
 
     :deep(.el-table__row) {
@@ -419,11 +457,41 @@ onUnmounted(() => {
     }
 
     :deep(.el-table--striped .el-table__row:nth-child(2n)) {
-      background-color: #fafafa;
+      background-color: var(--table-stripe);
     }
 
     :deep(.el-table__row:hover) {
-      background-color: #ecf5ff !important;
+      background-color: var(--table-hover) !important;
+    }
+
+    :deep(.caret-wrapper) {
+      height: 10px !important;
+      min-height: 0 !important;
+      display: inline-flex !important;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      margin-left: auto;
+      flex-shrink: 0;
+      padding: 0 !important;
+      border: none !important;
+      background: transparent !important;
+      box-sizing: content-box !important;
+      line-height: 0;
+      cursor: pointer;
+      overflow: visible;
+    }
+
+    :deep(.sort-caret) {
+      border-width: 3px;
+    }
+
+    :deep(.sort-caret.ascending) {
+      margin-bottom: -2px;
+    }
+
+    :deep(.sort-caret.descending) {
+      margin-top: -2px;
     }
   }
 
@@ -434,7 +502,6 @@ onUnmounted(() => {
     justify-content: center;
   }
 
-  /* 列头文字样式 - 有注释时显示帮助光标 */
   :deep(.column-header-text) {
     display: inline-block;
     max-width: 100%;
@@ -455,7 +522,6 @@ onUnmounted(() => {
 </style>
 
 <style lang="scss">
-/* 字段注释 tooltip 样式 - 全局生效，因为 tooltip 是渲染到 body 的 */
 .column-comment-tooltip {
   max-width: 360px !important;
   white-space: normal !important;

@@ -36,6 +36,9 @@ declare module 'vue' {
     ElOption: typeof import('element-plus/es')['ElOption']
     ElPagination: typeof import('element-plus/es')['ElPagination']
     ElPopconfirm: typeof import('element-plus/es')['ElPopconfirm']
+    ElProgress: typeof import('element-plus/es')['ElProgress']
+    ElRadio: typeof import('element-plus/es')['ElRadio']
+    ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
@@ -48,11 +51,13 @@ declare module 'vue' {
     ElTree: typeof import('element-plus/es')['ElTree']
     PromptConfigDialog: typeof import('./components/ai/PromptConfigDialog.vue')['default']
     QueryResult: typeof import('./components/editor/QueryResult.vue')['default']
+    QuotaBar: typeof import('./components/quota/QuotaBar.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SqlEditor: typeof import('./components/editor/SqlEditor.vue')['default']
     TableInfo: typeof import('./components/database/TableInfo.vue')['default']
     TableSelector: typeof import('./components/ai/TableSelector.vue')['default']
+    UpgradeDialog: typeof import('./components/quota/UpgradeDialog.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

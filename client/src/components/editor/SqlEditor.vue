@@ -31,6 +31,10 @@
         <el-icon><Clock /></el-icon>
         <span>分析历史</span>
       </el-button>
+      <el-button size="small" link type="primary" @click="handleOpenQueryHistory">
+        <el-icon><Timer /></el-icon>
+        <span>执行历史</span>
+      </el-button>
       <div style="flex: 1" />
       <el-button size="small" link @click="handleClear">
         清空
@@ -341,21 +345,119 @@
         <el-button @click="historyDetailVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- SQL 执行历史弹窗 -->
+    <el-dialog
+      v-model="queryHistoryVisible"
+      title="SQL 执行历史"
+      width="860px"
+      :close-on-click-modal="false"
+    >
+      <div class="history-toolbar">
+        <el-input
+          v-model="queryHistorySearch"
+          placeholder="搜索 SQL..."
+          :prefix-icon="Search"
+          clearable
+          size="small"
+          style="width: 260px"
+        />
+        <div style="flex: 1" />
+        <el-button size="small" type="danger" plain :disabled="!queryHistoryTotal" @click="handleClearQueryHistory">
+          清空历史
+        </el-button>
+      </div>
+
+      <el-empty v-if="!loadingQueryHistory && queryHistoryItems.length === 0" description="暂无执行历史" :image-size="120" />
+
+      <el-table
+        v-else
+        :data="filteredQueryHistory"
+        size="small"
+        border
+        stripe
+        style="width: 100%"
+        v-loading="loadingQueryHistory"
+        highlight-current-row
+        @row-dblclick="handleUseQueryHistory"
+      >
+        <el-table-column label="#" type="index" width="50" align="center">
+          <template #default="{ $index }">
+            {{ (queryHistoryPage - 1) * queryHistoryPageSize + $index + 1 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="SQL 片段" min-width="300">
+          <template #default="{ row }">
+            <span class="history-sql" :class="{ 'history-sql-error': !row.success }" :title="row.sql">
+              {{ row.sql.replace(/\s+/g, ' ').slice(0, 150) }}{{ row.sql.length > 150 ? '...' : '' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="数据库" width="120" prop="database" />
+        <el-table-column label="耗时" width="90" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: row.executionTime > 1000 ? '#f56c6c' : row.executionTime > 500 ? '#e6a23c' : '#67c23a' }">
+              {{ row.executionTime }}ms
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="结果" width="80" align="right">
+          <template #default="{ row }">
+            {{ row.success ? row.rowCount + ' 行' : '失败' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="时间" width="160">
+          <template #default="{ row }">
+            {{ formatDateTime(row.createdAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click.stop="handleUseQueryHistory(row as IQueryHistoryEntry)">使用</el-button>
+            <span class="history-actions-sep">|</span>
+            <el-button link type="danger" size="small" @click.stop="handleDeleteQueryHistoryItem(row as IQueryHistoryEntry)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="queryHistoryTotal > queryHistoryPageSize" class="history-pagination">
+        <el-pagination
+          v-model:current-page="queryHistoryPage"
+          v-model:page-size="queryHistoryPageSize"
+          :page-sizes="[20, 50, 100]"
+          :total="queryHistoryTotal"
+          layout="total, sizes, prev, pager, next"
+          small
+          background
+          @size-change="loadQueryHistory"
+          @current-change="loadQueryHistory"
+        />
+      </div>
+
+      <template #footer>
+        <el-button @click="queryHistoryVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, onUnmounted } from 'vue'
-import { CaretRight, MagicStick, Delete, TrendCharts, Clock } from '@element-plus/icons-vue'
+import { CaretRight, MagicStick, Delete, TrendCharts, Clock, Timer, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as monaco from 'monaco-editor'
 import { formatSql } from '@/utils/sql-formatter'
 import { fetchSSE } from '@/utils/sse'
+import { useAiStore } from '@/stores/ai'
 import { useConnectionStore } from '@/stores/connection'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useThemeStore } from '@/stores/theme'
+import { useUserStore } from '@/stores/user'
 import * as aiApi from '@/api/ai'
 import * as databaseApi from '@/api/database'
+import * as queryApi from '@/api/query'
 import type { IDatabase, IColumn } from '@/api/database'
+import type { IQueryHistoryEntry } from '@/api/query'
 import hljs from 'highlight.js/lib/core'
 import hljsSql from 'highlight.js/lib/languages/sql'
 // 不引入 highlight.js 主题文件，使用下方自定义的浅色语法配色
@@ -921,8 +1023,11 @@ const applyOptDots = ref('')
 let applyOptDotsTimer: ReturnType<typeof setInterval> | null = null
 let applyOptController: AbortController | null = null
 
+const aiStore = useAiStore()
 const connectionStore = useConnectionStore()
 const workspaceStore = useWorkspaceStore()
+const themeStore = useThemeStore()
+const userStore = useUserStore()
 
 // 分析历史相关
 const historyDialogVisible = ref(false)
@@ -1064,6 +1169,96 @@ function formatDateTime(s?: string): string {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   } catch {
     return ''
+  }
+}
+
+// ======== SQL 执行历史 ========
+const queryHistoryVisible = ref(false)
+const loadingQueryHistory = ref(false)
+const queryHistoryItems = ref<IQueryHistoryEntry[]>([])
+const queryHistoryTotal = ref(0)
+const queryHistoryPage = ref(1)
+const queryHistoryPageSize = ref(20)
+const queryHistorySearch = ref('')
+
+const filteredQueryHistory = computed(() => {
+  const kw = queryHistorySearch.value.trim().toLowerCase()
+  if (!kw) return queryHistoryItems.value
+  return queryHistoryItems.value.filter(h =>
+    h.sql.toLowerCase().includes(kw) ||
+    (h.database || '').toLowerCase().includes(kw)
+  )
+})
+
+async function handleOpenQueryHistory() {
+  queryHistoryVisible.value = true
+  queryHistoryPage.value = 1
+  await loadQueryHistory()
+}
+
+async function loadQueryHistory() {
+  loadingQueryHistory.value = true
+  try {
+    const resp = await queryApi.getQueryHistory({
+      page: queryHistoryPage.value,
+      pageSize: queryHistoryPageSize.value,
+    })
+    queryHistoryItems.value = resp?.data?.items || []
+    queryHistoryTotal.value = resp?.data?.total || 0
+  } catch {
+    queryHistoryItems.value = []
+    queryHistoryTotal.value = 0
+  } finally {
+    loadingQueryHistory.value = false
+  }
+}
+
+function handleUseQueryHistory(row: IQueryHistoryEntry) {
+  emit('update:modelValue', row.sql)
+  editor?.setValue(row.sql)
+  queryHistoryVisible.value = false
+}
+
+async function handleDeleteQueryHistoryItem(row: IQueryHistoryEntry) {
+  try {
+    await ElMessageBox.confirm('确定删除该条执行历史吗？', '删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch { return }
+  try {
+    await queryApi.deleteQueryHistory(row.id)
+    ElMessage.success('已删除')
+    if (queryHistoryItems.value.length === 1 && queryHistoryPage.value > 1) {
+      queryHistoryPage.value -= 1
+    }
+    await loadQueryHistory()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
+}
+
+async function handleClearQueryHistory() {
+  if (!queryHistoryTotal.value) {
+    ElMessage.info('历史已为空')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定清空全部 ${queryHistoryTotal.value} 条执行历史？`, '清空历史', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch { return }
+  try {
+    await queryApi.clearQueryHistory()
+    ElMessage.success('已清空')
+    queryHistoryPage.value = 1
+    queryHistoryTotal.value = 0
+    queryHistoryItems.value = []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '清空失败')
   }
 }
 
@@ -1366,7 +1561,7 @@ onMounted(() => {
     editor = monaco.editor.create(editorContainer.value, {
       value: props.modelValue,
       language: 'sql',
-      theme: 'vs',
+      theme: themeStore.isDark ? 'vs-dark' : 'vs',
       minimap: { enabled: false },
       fontSize: 14,
       fontFamily: "'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace",
@@ -1426,6 +1621,11 @@ onMounted(() => {
       handleExecute()
     })
 
+    // Ctrl+H 打开 SQL 执行历史
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {
+      handleOpenQueryHistory()
+    })
+
     // 注册右键菜单项（同时出现在命令面板 F1）
     // 选中 SQL 时按选区操作，无选中时对整个编辑器内容操作
     editor.addAction({
@@ -1460,6 +1660,14 @@ onMounted(() => {
       keybindings: [],
       run: () => handleAnalyze(),
     })
+    editor.addAction({
+      id: 'sql-history',
+      label: 'SQL 执行历史 (Ctrl+H)',
+      contextMenuGroupId: 'sql-actions',
+      contextMenuOrder: 5,
+      keybindings: [],
+      run: () => handleOpenQueryHistory(),
+    })
   }
 })
 
@@ -1471,6 +1679,13 @@ onBeforeUnmount(() => {
   completionProvider?.dispose()
   if (markerDebounceTimer) clearTimeout(markerDebounceTimer)
   editor?.dispose()
+})
+
+// 监听主题变化，切换 Monaco 编辑器主题
+watch(() => themeStore.isDark, (dark) => {
+  if (editor) {
+    monaco.editor.setTheme(dark ? 'vs-dark' : 'vs')
+  }
 })
 
 watch(() => props.modelValue, (newVal) => {
@@ -1650,6 +1865,7 @@ async function handleAnalyze() {
       sql,
     })
     analyzeResult.value = res.data
+    userStore.fetchQuota().catch(() => {})
   } catch (e: any) {
     ElMessage.error(e?.message || 'SQL 性能分析失败')
     analyzeDialogVisible.value = false
@@ -1738,6 +1954,7 @@ async function handleApplyOptimization() {
   // 把当前 SQL 放入 workspaceStore.aiGeneratedSql，保证 AI 对话面板能显示「原始 SQL」
   workspaceStore.setAiGeneratedSql(sql)
   workspaceStore.setAiOptimizedSql('')
+  workspaceStore.setAiOptimizing(true)
 
   applyOptState.value = 'loading'
   startApplyOptDots()
@@ -1760,19 +1977,53 @@ async function handleApplyOptimization() {
     },
     onError: (err) => {
       ElMessage.error(err?.message || '优化失败')
+      workspaceStore.setAiOptimizing(false)
       applyOptState.value = 'idle'
       stopApplyOptDots()
     },
     onComplete: () => {
+      workspaceStore.setAiOptimizing(false)
+      let finalSql = ''
       try {
-        const formatted = formatSql(rawBuf)
-        workspaceStore.setAiOptimizedSql(formatted)
+        finalSql = formatSql(rawBuf)
+        workspaceStore.setAiOptimizedSql(finalSql)
       } catch {
-        // 保持原结果
+        finalSql = rawBuf
+      }
+      if (!finalSql?.trim()) {
+        ElMessage.warning('AI 未返回有效的优化 SQL，请重试')
+        applyOptState.value = 'idle'
+        stopApplyOptDots()
+        return
+      }
+      // 写入 AI 对话历史
+      workspaceStore.addConversationMessage({
+        role: 'user',
+        content: `[应用优化（来自 SQL 性能分析）] ${sql.slice(0, 60)}...`,
+        timestamp: Date.now(),
+      })
+      workspaceStore.addConversationMessage({
+        role: 'assistant',
+        content: '优化后的 SQL',
+        sql: finalSql,
+        timestamp: Date.now(),
+      })
+      // 同时写入历史（方便 AI 对话面板的"历史"弹窗看到）
+      if (aiStore?.addHistory) {
+        aiStore.addHistory({
+          connectionId: props.connectionId,
+          database: currentDatabase.value,
+          tables: workspaceStore.checkedTables.map((t: any) => t.table),
+          question: `[应用优化] ${sql.slice(0, 60)}...`,
+          sql: finalSql,
+        }).catch((err: any) => {
+          console.error('保存优化SQL历史失败:', err)
+        })
       }
       applyOptState.value = 'done'
       stopApplyOptDots()
       ElMessage.success('优化完成，结果已写入 AI SQL 对话')
+      userStore.fetchQuota().catch(() => {})
     },
   })
 }
@@ -1797,7 +2048,7 @@ defineExpose({ setSql })
 
   .editor-toolbar {
     padding: 8px 12px;
-    border-bottom: 1px solid #e4e7ed;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1844,11 +2095,15 @@ defineExpose({ setSql })
 .history-sql {
   font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   font-size: 12.5px;
-  color: #303133;
+  color: var(--text-primary);
   display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+
+  &.history-sql-error {
+    color: #f56c6c;
+  }
 }
 
 .history-actions {
@@ -1860,7 +2115,7 @@ defineExpose({ setSql })
 }
 
 .history-actions-sep {
-  color: #dcdfe6;
+  color: var(--border-color);
   font-size: 12px;
   user-select: none;
 }
@@ -1872,13 +2127,13 @@ defineExpose({ setSql })
 }
 
 .history-detail-pre {
-  background: #f7f8fa;
-  border: 1px solid #ebeef5;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 10px 12px;
   font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   font-size: 12.5px;
-  color: #303133;
+  color: var(--text-primary);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1941,7 +2196,7 @@ defineExpose({ setSql })
   .loading-step {
     font-size: 15px;
     font-weight: 500;
-    color: #303133;
+    color: var(--text-primary);
     min-height: 22px;
     font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
@@ -1950,13 +2205,13 @@ defineExpose({ setSql })
     display: inline-block;
     min-width: 18px;
     text-align: left;
-    color: #606266;
+    color: var(--text-secondary);
   }
 
   .loading-progress {
     width: 280px;
     height: 8px;
-    background: #ebeef5;
+    background: var(--border-color);
     border-radius: 999px;
     overflow: hidden;
 
@@ -1973,14 +2228,14 @@ defineExpose({ setSql })
 
   .loading-progress-text {
     font-size: 12px;
-    color: #909399;
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
 
   .loading-hint {
     margin-top: 4px;
     font-size: 12px;
-    color: #c0c4cc;
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
   }
 }
@@ -2005,7 +2260,7 @@ defineExpose({ setSql })
 
   .analyze-label {
     font-weight: 600;
-    color: #303133;
+    color: var(--text-primary);
     margin-bottom: 6px;
     display: flex;
     align-items: center;
@@ -2019,25 +2274,25 @@ defineExpose({ setSql })
   .analyze-text {
     margin: 0;
     padding: 12px 14px;
-    background: #f7f8fa;
-    border: 1px solid #ebeef5;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 6px;
     font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
     font-size: 13px;
     line-height: 1.8;
-    color: #303133;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
 
     /* hljs 代码块：保持浅色背景，只做语法关键字/字符串等染色 */
     pre.hljs {
-      background: #ffffff;
-      border: 1px solid #ebeef5;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
       border-radius: 6px;
       padding: 10px 12px;
       margin: 6px 0;
-      color: #24292f;
+      color: var(--text-primary);
       font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
       font-size: 12.5px;
       line-height: 1.7;
@@ -2057,6 +2312,13 @@ defineExpose({ setSql })
       border-radius: 4px;
       font-family: 'JetBrains Mono', Consolas, Menlo, Monaco, 'Courier New', monospace;
       margin: 0 2px;
+    }
+
+    html.dark & {
+      .inline-sql-fragment {
+        background: #1a3a5c;
+        color: #79c0ff;
+      }
     }
 
     /* 关键字/字符串/数字等常见 hljs 语法颜色（与浅色背景兼容） */
@@ -2131,7 +2393,7 @@ defineExpose({ setSql })
   flex-wrap: wrap;
   gap: 8px 12px;
   font-size: 12px;
-  color: #606266;
+  color: var(--text-secondary);
 
   .legend-item {
     padding: 2px 8px;

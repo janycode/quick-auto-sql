@@ -35,20 +35,23 @@ export const useAiStore = defineStore('ai', () => {
 
   // 新增配置
   async function addConfig(data: { apiKey: string; apiUrl?: string; model?: string }) {
-    const res = await aiApi.addAiConfig(data)
-    configStore.value = res.data || configStore.value
+    await aiApi.addAiConfig(data)
+    // 新配置添加成功后，从后端拉取最新列表
+    await fetchConfigList()
   }
 
   // 删除配置
   async function deleteConfig(id: string) {
-    const res = await aiApi.deleteAiConfig(id)
-    configStore.value = res.data || configStore.value
+    await aiApi.deleteAiConfig(id)
+    // 成功后重新拉取配置列表，保持数据最新
+    await fetchConfigList()
   }
 
   // 激活配置
   async function activateConfig(id: string) {
-    const res = await aiApi.activateAiConfig(id)
-    configStore.value = res.data || configStore.value
+    await aiApi.activateAiConfig(id)
+    // 成功后重新拉取配置列表，获取更新后的 activeId
+    await fetchConfigList()
   }
 
   // 获取历史

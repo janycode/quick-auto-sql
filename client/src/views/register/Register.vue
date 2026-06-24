@@ -118,6 +118,10 @@
         </el-form-item>
       </el-form>
 
+      <div v-if="errorMessage" class="auth-error">
+        <span>{{ errorMessage }}</span>
+      </div>
+
       <div class="switch-row">
         已有账号？
         <el-link type="primary" :underline="false" @click="router.push('/login')">去登录</el-link>
@@ -143,6 +147,7 @@ const userStore = useUserStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const errorMessage = ref('')
 const codeSending = ref(false)
 const countdown = ref(0)
 const previewUrl = ref<string | null>(null)
@@ -248,6 +253,7 @@ async function onSubmit() {
     return
   }
   loading.value = true
+  errorMessage.value = ''
   try {
     await userStore.register({
       email: form.email.trim().toLowerCase(),
@@ -257,7 +263,9 @@ async function onSubmit() {
     ElMessage.success('注册成功，已为你登录')
     router.replace('/workspace')
   } catch (err: any) {
-    console.warn('register failed', err)
+    const message = typeof err?.message === 'string' ? err.message : '注册失败'
+    errorMessage.value = message
+    ElMessage.error(message)
   } finally {
     loading.value = false
   }
@@ -386,6 +394,19 @@ onBeforeUnmount(() => {
   height: 44px;
   font-size: 15px;
   letter-spacing: 4px;
+}
+
+.auth-error {
+  margin-top: 4px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  background: #fff1f0;
+  border: 1px solid #ffccc7;
+  border-radius: 6px;
+  color: #cf1322;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .switch-row {

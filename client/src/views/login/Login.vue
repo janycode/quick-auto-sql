@@ -61,6 +61,10 @@
         </el-form-item>
       </el-form>
 
+      <div v-if="errorMessage" class="auth-error">
+        <span>{{ errorMessage }}</span>
+      </div>
+
       <div class="switch-row">
         还没有账号？
         <el-link type="primary" :underline="false" @click="router.push('/register')">去注册</el-link>
@@ -86,6 +90,7 @@ const userStore = useUserStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const errorMessage = ref('')
 
 const form = reactive({
   username: '',
@@ -107,6 +112,7 @@ async function onSubmit() {
     return
   }
   loading.value = true
+  errorMessage.value = ''
   try {
     await userStore.login({ username: form.username, password: form.password })
     ElMessage.success('登录成功')
@@ -114,8 +120,10 @@ async function onSubmit() {
     const safeRedirect = /^\/[A-Za-z0-9_\-\/]*$/.test(redirect) ? redirect : '/workspace'
     router.replace(safeRedirect)
   } catch (err: any) {
-    // ElMessage 已经在 request 拦截器中处理过
-    console.warn('login failed', err)
+    const message = typeof err?.message === 'string' ? err.message : '账号或密码错误'
+    errorMessage.value = message
+    // 同时弹一个轻提示，让错误更醒目（不会再由全局拦截器处理）
+    ElMessage.error(message)
   } finally {
     loading.value = false
   }
@@ -239,6 +247,19 @@ async function onSubmit() {
   height: 44px;
   font-size: 15px;
   letter-spacing: 4px;
+}
+
+.auth-error {
+  margin-top: 4px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  background: #fff1f0;
+  border: 1px solid #ffccc7;
+  border-radius: 6px;
+  color: #cf1322;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .switch-row {

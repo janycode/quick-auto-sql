@@ -5,6 +5,7 @@ import {
   createSession,
   revokeSession,
   findSession,
+  findUserById,
   createUser,
   sendEmailCodeFor,
   verifyEmailCodeFor,
@@ -15,6 +16,7 @@ import { verifySmtpConfig } from '../services/email';
 import { config } from '../config';
 import { AuthRequest, extractToken } from '../middleware/auth';
 import type { ILoginRequest, IRegisterRequest, IEmailCodeRequest } from '../types';
+import { getQuotaInfo } from '../services/quota';
 
 const router = Router();
 
@@ -113,10 +115,14 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   try {
     const { user } = createUser(email, password);
     const session = createSession(user);
+    const quota = getQuotaInfo(user.id);
     success(res, {
       token: session.token,
       userId: session.userId,
       username: session.username,
+      role: user.role || 'editor',
+      plan: quota.plan,
+      quota,
     }, '注册成功');
   } catch (e: any) {
     fail(res, e?.message || '注册失败', 400, 400);
@@ -141,10 +147,14 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   }
 
   const session = createSession(user);
+  const quota = getQuotaInfo(user.id);
   success(res, {
     token: session.token,
     userId: session.userId,
     username: session.username,
+    role: user.role || 'viewer',
+    plan: quota.plan,
+    quota,
   }, '登录成功');
 }));
 
@@ -167,7 +177,15 @@ router.get('/me', asyncHandler(async (req: AuthRequest, res: Response) => {
     fail(res, '未登录或会话已失效', 401, 401);
     return;
   }
-  success(res, { userId: session.userId, username: session.username }, 'ok');
+  const user = findUserById(session.userId);
+  const quota = getQuotaInfo(session.userId);
+  success(res, {
+    userId: session.userId,
+    username: session.username,
+    role: user?.role || 'viewer',
+    plan: quota.plan,
+    quota,
+  }, 'ok');
 }));
 
 export default router;

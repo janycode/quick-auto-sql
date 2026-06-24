@@ -2,7 +2,7 @@
   <div class="home-page">
     <div class="home-container">
       <header class="home-header">
-        <div class="brand">
+        <div class="brand" @click="$router.push('/')">
           <div class="logo" aria-hidden="true">
             <svg viewBox="0 0 64 64" width="40" height="40">
               <defs>
@@ -25,10 +25,17 @@
           <div class="brand-title">Quick Auto SQL</div>
         </div>
 
+        <nav class="nav-links">
+          <a :class="{ active: isHome }" @click.prevent="$router.push('/')">首页</a>
+          <a :class="{ active: isPricing }" @click.prevent="goPricing">定价</a>
+        </nav>
+
         <div class="header-actions">
-          <el-button size="default" @click="goWorkspace">进入工作区</el-button>
           <el-button v-if="!isLoggedIn" type="primary" size="default" @click="goLogin">登录</el-button>
           <template v-else>
+            <span class="welcome-label">欢迎，</span>
+            <span class="account-label">{{ username }}</span>
+            <el-button size="default" type="primary" @click="$router.push('/workspace')">进入工作区</el-button>
             <el-button size="default" @click="onLogout">退出登录</el-button>
           </template>
         </div>
@@ -253,7 +260,48 @@ LIMIT 100;</code></pre>
         </el-collapse>
       </section>
 
-      <!-- ===== Section 7：CTA ===== -->
+      <!-- ===== Section 7：关于 / 项目说明 ===== -->
+      <section class="section section-about">
+        <div class="about-grid">
+          <div class="about-main">
+            <span class="section-tag">ABOUT</span>
+            <h2 class="section-title">关于 <span class="gradient-text">Quick Auto SQL</span></h2>
+            <p class="section-sub">
+              当前版本仅支持 <b>MySQL</b> 以及兼容 MySQL 语法的数据库（如 MariaDB、TiDB）；工具由
+              <b>个人独立开发</b>，后续将逐步适配更多数据库与更多大语言模型。
+            </p>
+            <p class="section-sub">
+              如果觉得好用，欢迎多多关注与支持；遇到任何问题、建议或想法，都非常欢迎到
+              <b>「反馈」</b> 区域留言，我会认真查阅每一条反馈。感谢支持 🎉
+            </p>
+
+            <div class="about-actions">
+              <el-button type="primary" round @click="goWorkspace">
+                <el-icon style="margin-right:6px"><MagicStick /></el-icon>
+                开始使用
+              </el-button>
+              <el-button round plain @click="onFeedback">
+                <el-icon style="margin-right:6px"><ChatDotRound /></el-icon>
+                提交反馈
+              </el-button>
+            </div>
+          </div>
+
+          <div class="about-side">
+            <div v-for="(item, idx) in aboutList" :key="item.title" class="about-item">
+              <div class="about-icon" :style="{ background: item.color }">
+                <el-icon><component :is="item.icon" /></el-icon>
+              </div>
+              <div class="about-body">
+                <div class="about-title">{{ item.title }}</div>
+                <div class="about-desc">{{ item.desc }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Section 8：CTA ===== -->
       <section class="cta-section">
         <div class="cta-card">
           <div class="cta-left">
@@ -272,13 +320,72 @@ LIMIT 100;</code></pre>
       <footer class="home-footer">
         <span>&copy; {{ year }} Quick Auto SQL · 面向工程师的 SQL 工作台</span>
       </footer>
+
+      <!-- ===== 反馈对话框 ===== -->
+      <el-dialog
+        v-model="feedbackVisible"
+        title="提交反馈"
+        width="560px"
+        :close-on-click-modal="false"
+        destroy-on-close
+        class="feedback-dialog"
+      >
+        <el-form
+          ref="feedbackFormRef"
+          :model="feedbackForm"
+          :rules="feedbackRules"
+          label-position="top"
+          label-width="0"
+        >
+          <el-form-item label="问题类型" prop="type">
+            <el-radio-group v-model="feedbackForm.type" class="feedback-radio-group">
+              <el-radio
+                v-for="item in feedbackTypeOptions"
+                :key="item.value"
+                :label="item.value"
+                class="feedback-radio"
+              >
+                <span class="radio-title">{{ item.label }}</span>
+                <span class="radio-desc">{{ item.desc }}</span>
+              </el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item label="详细描述" prop="description">
+            <el-input
+              v-model="feedbackForm.description"
+              type="textarea"
+              :autosize="{ minRows: 5, maxRows: 10 }"
+              maxlength="1000"
+              show-word-limit
+              placeholder="请尽可能详细地描述问题、使用场景与你的想法"
+            />
+          </el-form-item>
+
+          <el-form-item label="联系方式（邮箱）">
+            <el-input
+              v-model="feedbackForm.email"
+              placeholder="name@example.com（选填，便于后续沟通与回复）"
+              clearable
+            />
+          </el-form-item>
+        </el-form>
+
+        <template #footer>
+          <el-button @click="feedbackVisible = false">取消</el-button>
+          <el-button type="primary" :loading="feedbackSubmitting" @click="submitFeedback">
+            提交反馈
+          </el-button>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import {
   ArrowRight,
@@ -286,14 +393,23 @@ import {
   MagicStick,
   DataAnalysis,
   Document,
+  ChatDotRound,
+  Cpu,
+  User,
+  TrendCharts,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
+import { submitFeedback as apiSubmitFeedback, type FeedbackType } from '@/api/feedback'
 
+const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 
 const year = computed(() => new Date().getFullYear())
 const isLoggedIn = computed(() => userStore.isLoggedIn)
+const username = computed(() => userStore.username)
+const isHome = computed(() => route.path === '/')
+const isPricing = computed(() => route.path === '/pricing')
 
 const featureList = [
   {
@@ -356,6 +472,100 @@ const faqList = [
   },
 ]
 
+const aboutList = [
+  {
+    title: '当前支持的数据库',
+    desc: 'MySQL 及其他兼容 MySQL 语法的数据库（如 MariaDB、TiDB）。',
+    icon: 'Cpu',
+    color: 'linear-gradient(135deg,#5b8def,#7b5bff)',
+  },
+  {
+    title: '个人独立开发',
+    desc: '由个人开发者持续维护，关注使用体验与细节打磨，更贴近一线工程师的实际需求。',
+    icon: 'User',
+    color: 'linear-gradient(135deg,#7b5bff,#b55bff)',
+  },
+  {
+    title: '未来规划',
+    desc: '后续将逐步支持更多数据库（PostgreSQL、SQL Server 等）以及接入更多主流大语言模型。',
+    icon: 'TrendCharts',
+    color: 'linear-gradient(135deg,#ff8a65,#ffb347)',
+  },
+  {
+    title: '期待你的反馈',
+    desc: '无论你有问题、建议或想法，都欢迎到「反馈」区域告诉我，我会认真查阅每一条。',
+    icon: 'ChatDotRound',
+    color: 'linear-gradient(135deg,#43a047,#66bb6a)',
+  },
+]
+
+/* ===== 反馈表单 ===== */
+const feedbackVisible = ref(false)
+const feedbackSubmitting = ref(false)
+const feedbackFormRef = ref<FormInstance>()
+
+const feedbackTypeOptions = [
+  { value: 'bug', label: '功能异常', desc: '功能故障或不可用' },
+  { value: 'suggestion', label: '产品建议', desc: '功能用得不爽想提建议' },
+  { value: 'security', label: '安全问题', desc: '密码、数据、隐私等' },
+  { value: 'other', label: '其他问题', desc: '其他类型的问题与想法' },
+]
+
+function emptyFeedbackForm() {
+  return { type: '', description: '', email: '' }
+}
+
+const feedbackForm = reactive(emptyFeedbackForm())
+
+const feedbackRules: FormRules = {
+  type: [
+    { required: true, message: '请选择问题类型', trigger: 'change' },
+  ],
+  description: [
+    { required: true, message: '请填写详细描述', trigger: 'blur' },
+    { min: 5, max: 1000, message: '长度在 5 到 1000 个字符之间', trigger: 'blur' },
+  ],
+  email: [
+    {
+      type: 'email',
+      message: '请输入合法的邮箱地址',
+      trigger: 'blur',
+    },
+  ],
+}
+
+function onFeedback() {
+  Object.assign(feedbackForm, emptyFeedbackForm())
+  feedbackFormRef.value?.clearValidate?.()
+  feedbackVisible.value = true
+}
+
+async function submitFeedback() {
+  const form = feedbackFormRef.value
+  if (!form) return
+  try {
+    const valid = await form.validate().catch(() => false)
+    if (!valid) return
+  } catch {
+    return
+  }
+
+  feedbackSubmitting.value = true
+  try {
+    const res = await apiSubmitFeedback({
+      type: feedbackForm.type as FeedbackType,
+      description: feedbackForm.description,
+      email: feedbackForm.email || undefined,
+    })
+    if (res?.code === 0) {
+      ElMessage.success('感谢你的反馈，我已收到！')
+      feedbackVisible.value = false
+    }
+  } finally {
+    feedbackSubmitting.value = false
+  }
+}
+
 function goWorkspace() {
   if (!isLoggedIn.value) {
     router.push({ path: '/login', query: { redirect: '/workspace' } })
@@ -366,6 +576,10 @@ function goWorkspace() {
 
 function goLogin() {
   router.push({ path: '/login', query: { redirect: '/workspace' } })
+}
+
+function goPricing() {
+  router.push('/pricing')
 }
 
 async function onLogout() {
@@ -392,6 +606,10 @@ function scrollTo(id: string) {
 .home-page {
   min-height: 100vh;
   width: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  color: #1f2a44;
   background:
     radial-gradient(circle at 15% 15%, rgba(91, 141, 239, 0.16), transparent 45%),
     radial-gradient(circle at 85% 80%, rgba(123, 91, 255, 0.2), transparent 45%),
@@ -417,6 +635,7 @@ function scrollTo(id: string) {
     display: flex;
     align-items: center;
     gap: 12px;
+    cursor: pointer;
 
     .logo {
       width: 40px;
@@ -434,9 +653,47 @@ function scrollTo(id: string) {
     }
   }
 
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-left: 16px;
+
+    a {
+      font-size: 14px;
+      color: #5b6680;
+      cursor: pointer;
+      text-decoration: none;
+      transition: color 0.2s;
+
+      &:hover {
+        color: #409eff;
+      }
+
+      &.active {
+        color: #409eff;
+        font-weight: 500;
+      }
+    }
+  }
+
   .header-actions {
     display: flex;
     gap: 8px;
+    align-items: center;
+
+    .welcome-label {
+      font-size: 13px;
+      color: #8a93a8;
+      font-weight: 400;
+    }
+
+    .account-label {
+      font-size: 13.5px;
+      color: #1f2a44;
+      font-weight: 500;
+      padding: 0 4px;
+    }
   }
 }
 
@@ -626,7 +883,6 @@ function scrollTo(id: string) {
 
   .card-title {
     margin-left: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12.5px;
     color: #6b7590;
   }
@@ -635,13 +891,22 @@ function scrollTo(id: string) {
 .card-code {
   margin: 0;
   padding: 20px 22px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: "JetBrains Mono", "SF Mono", "Menlo", "Monaco",
+    ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   line-height: 1.85;
   color: #2b3350;
   background: #fbfcff;
   white-space: pre;
   overflow-x: auto;
+
+  code {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: transparent;
+    padding: 0;
+  }
 }
 
 .card-footer {
@@ -796,7 +1061,6 @@ function scrollTo(id: string) {
 }
 
 .feature-card-num {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 14px;
   font-weight: 600;
   color: #a9b2c3;
@@ -857,7 +1121,6 @@ function scrollTo(id: string) {
 
 .flow-index {
   display: inline-block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 14px;
   font-weight: 700;
   color: #5b8def;
@@ -865,6 +1128,7 @@ function scrollTo(id: string) {
   padding: 4px 10px;
   border-radius: 999px;
   margin-bottom: 14px;
+  letter-spacing: 0.5px;
 }
 
 .flow-title {
@@ -972,7 +1236,8 @@ function scrollTo(id: string) {
   }
 
   code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: "JetBrains Mono", "SF Mono", "Menlo", "Monaco",
+      ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12.5px;
     line-height: 1.85;
     white-space: pre;
@@ -1066,5 +1331,186 @@ function scrollTo(id: string) {
   color: #8a93a8;
   font-size: 12.5px;
   padding: 12px 0 24px;
+}
+
+/* ===== About 项目说明 ===== */
+.section-about {
+  padding: 16px 0;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 32px;
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(91, 141, 239, 0.15);
+  border-radius: 20px;
+  backdrop-filter: blur(4px);
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+    padding: 24px;
+    gap: 24px;
+  }
+}
+
+.about-main {
+  .section-tag,
+  .section-title,
+  .section-sub {
+    max-width: 620px;
+  }
+
+  .section-sub {
+    margin-top: 8px;
+    margin-bottom: 12px;
+
+    b {
+      color: #1f2a44;
+      background: rgba(91, 141, 239, 0.12);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+  }
+}
+
+.about-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+
+.about-side {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  align-content: start;
+}
+
+.about-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  background: linear-gradient(135deg, #ffffff 0%, #f7f9fc 100%);
+  border: 1px solid rgba(91, 141, 239, 0.12);
+  border-radius: 14px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(60, 80, 150, 0.12);
+  }
+}
+
+.about-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 18px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.about-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.about-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2a44;
+  margin-bottom: 4px;
+}
+
+.about-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #6b7590;
+}
+
+/* ===== 反馈对话框 ===== */
+.feedback-dialog {
+  :deep(.el-dialog__body) {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  :deep(.el-form-item) {
+    margin-bottom: 18px;
+  }
+
+  .feedback-radio-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .feedback-radio {
+    display: flex;
+    align-items: flex-start;
+    padding: 14px 16px;
+    border: 1px solid #dcdfe6;
+    border-radius: 10px;
+    margin-right: 0;
+    transition: all 0.25s ease;
+    cursor: pointer;
+    background: #fff;
+    box-sizing: border-box;
+    height: auto !important;
+    min-height: 56px;
+
+    &.is-checked {
+      border-color: #5b8def;
+      background: linear-gradient(135deg, rgba(91, 141, 239, 0.08), rgba(123, 91, 255, 0.06));
+      box-shadow: 0 2px 8px rgba(91, 141, 239, 0.12);
+    }
+
+    &:hover {
+      border-color: #5b8def;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(91, 141, 239, 0.1);
+    }
+
+    :deep(.el-radio__input) {
+      margin-top: 2px;
+      flex-shrink: 0;
+    }
+
+    :deep(.el-radio__label) {
+      display: flex;
+      flex-direction: column;
+      padding-left: 8px;
+      line-height: 1.4;
+      flex: 1;
+      min-width: 0;
+      white-space: normal;
+    }
+
+    .radio-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2a44;
+      line-height: 1.4;
+      display: block;
+    }
+
+    .radio-desc {
+      margin-top: 4px;
+      font-size: 12.5px;
+      color: #6b7590;
+      line-height: 1.5;
+      display: block;
+      white-space: normal;
+    }
+  }
 }
 </style>

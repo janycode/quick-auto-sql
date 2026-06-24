@@ -11,12 +11,21 @@ const KEY_AI_OPTIMIZED_SQL = STORAGE_PREFIX + 'ai-optimized-sql'
 const KEY_CHECKED_TABLES = STORAGE_PREFIX + 'checked-tables'
 const KEY_EXPANDED_KEYS = STORAGE_PREFIX + 'expanded-keys'
 const KEY_CURRENT_DB = STORAGE_PREFIX + 'current-database'
+const KEY_CONVERSATION = STORAGE_PREFIX + 'conversation'
 
 // 关联表对象结构
 export interface ICheckedTable {
   database: string
   table: string
   comment: string
+}
+
+// 对话消息结构
+export interface IConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+  sql?: string
+  timestamp: number
 }
 
 function safeParse<T>(raw: string | null, def: T): T {
@@ -49,6 +58,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const currentDatabase = ref(localStorage.getItem(KEY_CURRENT_DB) || '')
   // 是否正在执行查询（防止重复点击）
   const executing = ref(false)
+  // AI 面板：是否正在生成 SQL
+  const aiGenerating = ref(false)
+  // AI 面板：是否正在优化 SQL
+  const aiOptimizing = ref(false)
+  // AI 对话消息历史
+  const conversationMessages = ref<IConversationMessage[]>(
+    safeParse<IConversationMessage[]>(localStorage.getItem(KEY_CONVERSATION), [])
+  )
 
   // 监听 & 持久化
   watch(sql, v => localStorage.setItem(KEY_SQL, v))
@@ -66,6 +83,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (v) localStorage.setItem(KEY_CURRENT_DB, v)
     else localStorage.removeItem(KEY_CURRENT_DB)
   })
+  watch(conversationMessages, v => localStorage.setItem(KEY_CONVERSATION, JSON.stringify(v)), { deep: true })
 
   // 清空查询结果
   function clearQueryResult() {
@@ -104,6 +122,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     aiOptimizedSql.value = v
   }
 
+  // 设置 AI 生成中状态（右侧面板 loading 显示）
+  function setAiGenerating(v: boolean) {
+    aiGenerating.value = v
+  }
+
+  // 设置 AI 优化中状态（右侧面板 loading 显示）
+  function setAiOptimizing(v: boolean) {
+    aiOptimizing.value = v
+  }
+
   // 设置 AI 问题
   function setAiQuestion(v: string) {
     aiQuestion.value = v
@@ -136,6 +164,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     queryResult.value = result
   }
 
+  // 添加对话消息
+  function addConversationMessage(msg: IConversationMessage) {
+    conversationMessages.value.push(msg)
+  }
+
+  // 清空对话历史
+  function clearConversation() {
+    conversationMessages.value = []
+  }
+
+  // 获取对话历史（用于发送给 AI）
+  function getConversationForAI(): Array<{ role: 'user' | 'assistant'; content: string }> {
+    return conversationMessages.value.map(m => ({
+      role: m.role,
+      content: m.sql ? `${m.content}\n\n生成的 SQL:\n\`\`\`sql\n${m.sql}\n\`\`\`` : m.content,
+    }))
+  }
+
   // 清空所有与连接相关的状态（切换连接时调用）
   function clearAll() {
     sql.value = ''
@@ -143,10 +189,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     aiQuestion.value = ''
     aiGeneratedSql.value = ''
     aiOptimizedSql.value = ''
+    aiGenerating.value = false
+    aiOptimizing.value = false
     checkedTables.value = []
     checkedTableKeys.value = []
     expandedKeys.value = []
     currentDatabase.value = ''
+    conversationMessages.value = []
   }
 
   return {
@@ -155,15 +204,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     aiQuestion,
     aiGeneratedSql,
     aiOptimizedSql,
+    aiGenerating,
+    aiOptimizing,
     checkedTables,
     checkedTableKeys,
     expandedKeys,
     currentDatabase,
     executing,
+    conversationMessages,
     clearQueryResult,
     setSql,
     setAiGeneratedSql,
     setAiOptimizedSql,
+    setAiGenerating,
+    setAiOptimizing,
     setAiQuestion,
     setCheckedTables,
     clearCheckedTables,
@@ -173,6 +227,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     addExpandedKey,
     removeExpandedKey,
     clearExpandedKeys,
+    addConversationMessage,
+    clearConversation,
+    getConversationForAI,
     clearAll,
   }
 })

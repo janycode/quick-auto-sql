@@ -3,11 +3,16 @@ import cors from 'cors';
 import { config } from './config';
 import { errorHandler } from './middleware/error-handler';
 import { requireAuth } from './middleware/auth';
+import { apiRateLimit, authRateLimit, aiRateLimit } from './middleware/security';
 import connectionRouter from './routes/connection';
 import databaseRouter from './routes/database';
 import queryRouter from './routes/query';
 import aiRouter from './routes/ai';
 import authRouter from './routes/auth';
+import auditRouter from './routes/audit';
+import quotaRouter from './routes/quota';
+import payRouter from './routes/pay';
+import feedbackRouter from './routes/feedback';
 
 const app = express();
 
@@ -22,8 +27,11 @@ app.use((req, _res, next) => {
   next();
 });
 
+// 全局速率限制
+app.use('/api', apiRateLimit);
+
 // 登录相关 & 健康检查 不需要鉴权
-app.use('/api/auth', authRouter);
+app.use('/api/auth', authRateLimit, authRouter);
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
@@ -32,7 +40,11 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/connections', requireAuth, connectionRouter);
 app.use('/api/databases', requireAuth, databaseRouter);
 app.use('/api/query', requireAuth, queryRouter);
-app.use('/api/ai', requireAuth, aiRouter);
+app.use('/api/ai', requireAuth, aiRateLimit, aiRouter);
+app.use('/api/audit', requireAuth, auditRouter);
+app.use('/api/quota', requireAuth, quotaRouter);
+app.use('/api/pay', requireAuth, payRouter);
+app.use('/api/feedback', feedbackRouter);
 
 // 错误处理
 app.use(errorHandler);

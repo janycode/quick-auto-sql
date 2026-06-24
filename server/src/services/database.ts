@@ -1,8 +1,7 @@
-import { IDatabase, ITable, IColumn } from '../types';
+import { IDatabase, ITable, IColumn, ITableStatus } from '../types';
 import { getPoolById } from './connection';
 import mysql from 'mysql2/promise';
 
-// MySQL 连接失败相关错误码，命中时优先把原生 code 透传到 error-handler
 const MYSQL_UNAVAILABLE_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
@@ -31,9 +30,9 @@ function wrapMySqlError(error: any): Error {
   return wrapped;
 }
 
-async function acquireConn(connectionId: string): Promise<mysql.PoolConnection> {
-  const pool = getPoolById(connectionId);
-  if (!pool) throw new Error('连接不存在或未配置');
+async function acquireConn(connectionId: string, userId?: string): Promise<mysql.PoolConnection> {
+  const pool = getPoolById(connectionId, userId);
+  if (!pool) throw new Error('连接不存在或无权限');
   try {
     return await pool.getConnection();
   } catch (error) {
@@ -41,9 +40,8 @@ async function acquireConn(connectionId: string): Promise<mysql.PoolConnection> 
   }
 }
 
-// 获取数据库列表
-export async function getDatabases(connectionId: string): Promise<IDatabase[]> {
-  const conn = await acquireConn(connectionId);
+export async function getDatabases(connectionId: string, userId?: string): Promise<IDatabase[]> {
+  const conn = await acquireConn(connectionId, userId);
   try {
     const [rows] = await conn.query(
       `SELECT SCHEMA_NAME as name, DEFAULT_CHARACTER_SET_NAME as charset, DEFAULT_COLLATION_NAME as collation
@@ -59,9 +57,8 @@ export async function getDatabases(connectionId: string): Promise<IDatabase[]> {
   }
 }
 
-// 获取表列表
-export async function getTables(connectionId: string, database: string): Promise<ITable[]> {
-  const conn = await acquireConn(connectionId);
+export async function getTables(connectionId: string, database: string, userId?: string): Promise<ITable[]> {
+  const conn = await acquireConn(connectionId, userId);
   try {
     const [rows] = await conn.query(
       `SELECT TABLE_NAME as name, TABLE_COMMENT as comment, ENGINE as engine, TABLE_ROWS as rowCount
@@ -78,9 +75,8 @@ export async function getTables(connectionId: string, database: string): Promise
   }
 }
 
-// 获取表字段信息
-export async function getColumns(connectionId: string, database: string, table: string): Promise<IColumn[]> {
-  const conn = await acquireConn(connectionId);
+export async function getColumns(connectionId: string, database: string, table: string, userId?: string): Promise<IColumn[]> {
+  const conn = await acquireConn(connectionId, userId);
   try {
     const [rows] = await conn.query(
       `SELECT
@@ -104,9 +100,8 @@ export async function getColumns(connectionId: string, database: string, table: 
   }
 }
 
-// 获取表 DDL
-export async function getTableDDL(connectionId: string, database: string, table: string): Promise<string> {
-  const conn = await acquireConn(connectionId);
+export async function getTableDDL(connectionId: string, database: string, table: string, userId?: string): Promise<string> {
+  const conn = await acquireConn(connectionId, userId);
   try {
     await conn.changeUser({ database });
     const [rows] = await conn.query(`SHOW CREATE TABLE \`${table}\``);
@@ -116,16 +111,14 @@ export async function getTableDDL(connectionId: string, database: string, table:
     }
     return '';
   } catch {
-    // 回退方案：使用 INFORMATION_SCHEMA 拼接
-    return await buildDDLFromSchema(connectionId, database, table);
+    return await buildDDLFromSchema(connectionId, database, table, userId);
   } finally {
     conn.release();
   }
 }
 
-// 通过 INFORMATION_SCHEMA 拼接 DDL
-async function buildDDLFromSchema(connectionId: string, database: string, table: string): Promise<string> {
-  const columns = await getColumns(connectionId, database, table);
+async function buildDDLFromSchema(connectionId: string, database: string, table: string, userId?: string): Promise<string> {
+  const columns = await getColumns(connectionId, database, table, userId);
 
   let ddl = `CREATE TABLE \`${table}\` (\n`;
   const colDefs = columns.map(col => {
@@ -147,16 +140,58 @@ async function buildDDLFromSchema(connectionId: string, database: string, table:
   return ddl;
 }
 
-// 获取多张表的完整结构描述（用于 AI Prompt），使用 DDL + 字段注释
-export async function getTablesSchemaForAI(connectionId: string, database: string, tables: string[]): Promise<string> {
-  const conn = await acquireConn(connectionId);
+export async function getTableStatus(connectionId: string, database: string, table: string, userId?: string): Promise<ITableStatus> {
+  const conn = await acquireConn(connectionId, userId);
+  try {
+    const [statusRows] = await conn.query(`SHOW TABLE STATUS FROM \`${database}\` LIKE ?`, [table]);
+    const statusArr = statusRows as any[];
+    const status = statusArr[0] || {};
+
+    const [[colCountResult]]: any = await conn.query(
+      `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+      [database, table]
+    );
+
+    const [[idxCountResult]]: any = await conn.query(
+      `SELECT COUNT(DISTINCT INDEX_NAME) as cnt FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+      [database, table]
+    );
+
+    return {
+      name: status.Name || table,
+      engine: status.Engine || null,
+      version: status.Version ?? null,
+      rowFormat: status.Row_format || null,
+      rows: status.Rows ?? null,
+      avgRowLength: status.Avg_row_length ?? null,
+      dataLength: status.Data_length ?? null,
+      maxDataLength: status.Max_data_length ?? null,
+      indexLength: status.Index_length ?? null,
+      dataFree: status.Data_free ?? null,
+      autoIncrement: status.Auto_increment ?? null,
+      createTime: status.Create_time ? new Date(status.Create_time).toISOString() : null,
+      updateTime: status.Update_time ? new Date(status.Update_time).toISOString() : null,
+      checkTime: status.Check_time ? new Date(status.Check_time).toISOString() : null,
+      collation: status.Collation || null,
+      comment: status.Comment || null,
+      columnCount: colCountResult?.cnt || 0,
+      indexCount: idxCountResult?.cnt || 0,
+    };
+  } catch (error) {
+    throw wrapMySqlError(error);
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getTablesSchemaForAI(connectionId: string, database: string, tables: string[], userId?: string): Promise<string> {
+  const conn = await acquireConn(connectionId, userId);
   try {
     await conn.changeUser({ database });
 
     const schemas: string[] = [];
 
     for (const table of tables) {
-      // 1. 获取完整 DDL（最准确的表结构信息）
       let ddl = '';
       try {
         const [rows] = await conn.query(`SHOW CREATE TABLE \`${table}\``);
@@ -168,7 +203,6 @@ export async function getTablesSchemaForAI(connectionId: string, database: strin
         // DDL 获取失败则回退
       }
 
-      // 2. 获取字段注释补充信息
       const [colRows] = await conn.query(
         `SELECT
            COLUMN_NAME as name,
@@ -186,10 +220,8 @@ export async function getTablesSchemaForAI(connectionId: string, database: strin
       let schema = `### 表: ${table}\n`;
 
       if (ddl) {
-        // 优先使用完整 DDL
         schema += `DDL:\n${ddl}\n`;
       } else {
-        // 回退：使用字段列表
         for (const col of columns) {
           let desc = `- ${col.name}: ${col.type}`;
           if (col.key === 'PRI') desc += ', 主键';
@@ -198,7 +230,6 @@ export async function getTablesSchemaForAI(connectionId: string, database: strin
         }
       }
 
-      // 补充字段中文注释（DDL 中可能没有注释或注释不够直观）
       const comments = columns
         .filter(c => c.comment)
         .map(c => `  ${c.name}: ${c.comment}`);

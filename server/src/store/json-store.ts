@@ -269,13 +269,87 @@ export class JsonStore<T = unknown> {
 export const connectionStore = new JsonStore('connections.json');
 export const aiHistoryStore = new JsonStore<{ id: string; [key: string]: unknown }>('ai-history.json');
 
-// ==================== SQL 性能分析缓存（按 SQL 内容哈希） ====================
+// ==================== SQL 执行历史 ====================
+
+export interface IQueryHistoryEntry {
+  id: string;
+  sql: string;
+  connectionId: string;
+  database: string;
+  executionTime: number;
+  rowCount: number;
+  success: boolean;
+  errorMessage?: string;
+  userId: string;       // 所属用户
+  createdAt: string;
+}
+
+const QUERY_HISTORY_FILE = 'query-history.json';
+const queryHistoryStore = new JsonStore<IQueryHistoryEntry>(QUERY_HISTORY_FILE);
+const QUERY_HISTORY_MAX = 500;
+
+export function addQueryHistory(entry: Omit<IQueryHistoryEntry, 'id' | 'createdAt'>): IQueryHistoryEntry {
+  const items = queryHistoryStore.read();
+  const newEntry: IQueryHistoryEntry = {
+    ...entry,
+    id: uuidv4(),
+    createdAt: new Date().toISOString(),
+  };
+  items.unshift(newEntry);
+  if (items.length > QUERY_HISTORY_MAX) {
+    items.splice(QUERY_HISTORY_MAX);
+  }
+  queryHistoryStore.write(items);
+  return newEntry;
+}
+
+export function listQueryHistoryPage(page: number, pageSize: number, connectionId?: string, userId?: string): { items: IQueryHistoryEntry[]; total: number } {
+  let items = queryHistoryStore.read();
+  if (userId) {
+    items = items.filter((i) => i.userId === userId);
+  }
+  if (connectionId) {
+    items = items.filter((i) => i.connectionId === connectionId);
+  }
+  items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const total = items.length;
+  const safePage = Math.max(1, page);
+  const safeSize = Math.max(1, Math.min(200, pageSize));
+  const start = (safePage - 1) * safeSize;
+  return { items: items.slice(start, start + safeSize), total };
+}
+
+export function deleteQueryHistory(id: string, userId?: string): boolean {
+  const items = queryHistoryStore.read();
+  const idx = items.findIndex((i) => i.id === id);
+  if (idx < 0) return false;
+  if (userId && items[idx].userId !== userId) return false;
+  items.splice(idx, 1);
+  queryHistoryStore.write(items);
+  return true;
+}
+
+export function clearQueryHistory(userId?: string): number {
+  const items = queryHistoryStore.read();
+  if (!userId) {
+    const count = items.length;
+    queryHistoryStore.write([]);
+    return count;
+  }
+  const kept = items.filter((i) => i.userId !== userId);
+  const count = items.length - kept.length;
+  queryHistoryStore.write(kept);
+  return count;
+}
+
+// ==================== SQL 性能分析缓存（按 SQL 内容哈希；按用户隔离） ====================
 
 export interface ISqlAnalysisCacheEntry {
   id: string;
   sql: string;
   analysis: string;
   explain: Record<string, unknown>[];
+  userId: string;       // 所属用户
   createdAt: string;
 }
 
@@ -283,7 +357,7 @@ const SQL_ANALYSIS_CACHE_FILE = 'ai-sql-analysis-cache.json';
 
 const analysisCacheStore = new JsonStore<ISqlAnalysisCacheEntry>(SQL_ANALYSIS_CACHE_FILE);
 
-// 对 SQL 做稳定 hash，忽略首尾空白与大小写（内容变化时才会视为新 SQL）
+// 对 SQL 做稳定 hash，忽略首尾空白与大小写
 function hashSql(sql: string): string {
   const normalized = sql
     .replace(/\s+/g, ' ')
@@ -301,12 +375,14 @@ function hashSql(sql: string): string {
   return `${s1}${s2}`;
 }
 
-export function findAnalysisCache(sql: string): ISqlAnalysisCacheEntry | undefined {
+export function findAnalysisCache(sql: string, userId?: string): ISqlAnalysisCacheEntry | undefined {
   if (!sql) return undefined;
   const targetHash = hashSql(sql);
   const items = readAnalysisCacheWithMigration();
   for (const item of items) {
-    if (item && hashSql(item.sql) === targetHash) return item;
+    if (!item) continue;
+    if (userId && item.userId !== userId) continue;
+    if (hashSql(item.sql) === targetHash) return item;
   }
   return undefined;
 }
@@ -315,14 +391,15 @@ function readAnalysisCacheWithMigration(): ISqlAnalysisCacheEntry[] {
   const items = analysisCacheStore.read();
   let changed = false;
   for (let i = 0; i < items.length; i++) {
-    if (!items[i] || !items[i].id) {
+    const it = items[i];
+    if (!it || !it.id || it.userId === undefined) {
       items[i] = {
-        ...(items[i] || {}),
-        id: uuidv4(),
-        sql: (items[i] as any)?.sql || '',
-        analysis: (items[i] as any)?.analysis || '',
-        explain: (items[i] as any)?.explain || [],
-        createdAt: (items[i] as any)?.createdAt || new Date().toISOString(),
+        id: (it as any)?.id || uuidv4(),
+        sql: (it as any)?.sql || '',
+        analysis: (it as any)?.analysis || '',
+        explain: (it as any)?.explain || [],
+        userId: (it as any)?.userId || '',
+        createdAt: (it as any)?.createdAt || new Date().toISOString(),
       };
       changed = true;
     }
@@ -331,23 +408,23 @@ function readAnalysisCacheWithMigration(): ISqlAnalysisCacheEntry[] {
   return items;
 }
 
-export function saveAnalysisCache(sql: string, analysis: string, explain: Record<string, unknown>[]): ISqlAnalysisCacheEntry {
+export function saveAnalysisCache(sql: string, analysis: string, explain: Record<string, unknown>[], userId?: string): ISqlAnalysisCacheEntry {
   const items = readAnalysisCacheWithMigration();
   const targetHash = hashSql(sql);
-  const existingIdx = items.findIndex(i => hashSql(i.sql) === targetHash);
+  const existingIdx = items.findIndex((i) => i.userId === (userId || '') && hashSql(i.sql) === targetHash);
   const entry: ISqlAnalysisCacheEntry = {
     id: existingIdx >= 0 && items[existingIdx]?.id ? items[existingIdx].id : uuidv4(),
     sql,
     analysis,
     explain,
+    userId: userId || '',
     createdAt: new Date().toISOString(),
   };
-  // 若已存在相同 SQL，则覆盖；否则追加
   if (existingIdx >= 0) {
     items[existingIdx] = entry;
   } else {
     items.push(entry);
-    // 最多保留最近 200 条，避免文件无限膨胀
+    // 最多保留最近 200 条（按用户聚合后总量更合理，但为简单起见按总量限制）
     if (items.length > 200) {
       items.splice(0, items.length - 200);
     }
@@ -356,32 +433,39 @@ export function saveAnalysisCache(sql: string, analysis: string, explain: Record
   return entry;
 }
 
-export function deleteAnalysisCacheById(id: string): boolean {
+export function deleteAnalysisCacheById(id: string, userId?: string): boolean {
   if (!id) return false;
   const items = readAnalysisCacheWithMigration();
-  const idx = items.findIndex(i => i && i.id === id);
+  const idx = items.findIndex((i) => i && i.id === id);
   if (idx < 0) return false;
+  if (userId && items[idx].userId !== userId) return false;
   items.splice(idx, 1);
   analysisCacheStore.write(items);
   return true;
 }
 
-export function clearAnalysisCache(): number {
-  const count = (readAnalysisCacheWithMigration() || []).length;
-  analysisCacheStore.write([]);
+export function clearAnalysisCache(userId?: string): number {
+  const items = readAnalysisCacheWithMigration() || [];
+  if (!userId) {
+    analysisCacheStore.write([]);
+    return items.length;
+  }
+  const kept = items.filter((i) => i.userId !== userId);
+  const count = items.length - kept.length;
+  analysisCacheStore.write(kept);
   return count;
 }
 
-export function listAnalysisCache(): ISqlAnalysisCacheEntry[] {
+export function listAnalysisCache(userId?: string): ISqlAnalysisCacheEntry[] {
   const items = readAnalysisCacheWithMigration();
-  // 按 createdAt 倒序返回，最新的在最前
-  return [...items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const filtered = userId ? items.filter((i) => i.userId === userId) : items;
+  return [...filtered].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
-export function listAnalysisCachePage(page: number, pageSize: number): { items: ISqlAnalysisCacheEntry[]; total: number } {
+export function listAnalysisCachePage(page: number, pageSize: number, userId?: string): { items: ISqlAnalysisCacheEntry[]; total: number } {
   const items = readAnalysisCacheWithMigration();
-  // 按 createdAt 倒序
-  const sorted = [...items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const filtered = userId ? items.filter((i) => i.userId === userId) : items;
+  const sorted = [...filtered].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const total = sorted.length;
   const safePage = Math.max(1, Number.isFinite(page) ? page : 1);
   const safeSize = Math.max(1, Math.min(200, Number.isFinite(pageSize) ? pageSize : 10));
@@ -390,7 +474,27 @@ export function listAnalysisCachePage(page: number, pageSize: number): { items: 
   return { items: sorted.slice(start, end), total };
 }
 
-// AI 配置存储（多配置 + activeId）
+// 默认 AI 配置 ID（与 services/ai.ts 保持一致）
+export const DEFAULT_AI_CONFIG_ID = 'default-openrouter';
+
+// AI 配置存储（多配置 + 按用户激活）
+/**
+ * ai-config.json 配置格式：
+ * {
+ *   "configs": [
+ *     {
+ *       "id": "default-openrouter",
+ *       "apiKey": "sk-...",
+ *       "apiUrl": "https://openrouter.ai/api/v1/chat/completions",
+ *       "model": "openrouter/free",
+ *       "createdAt": "2026-06-24T08:21:20.914Z",
+ *       "isDefault": true,
+ *       "displayModel": "默认模型",
+ *       "displayApiUrl": "https://localhost/api/v1/chat/completions"
+ *     }
+ *   ]
+ * }
+ */
 export const aiConfigStore = (() => {
   const filePath = path.join(config.dataDir, 'ai-config.json');
   const dir = path.dirname(filePath);
@@ -398,16 +502,38 @@ export const aiConfigStore = (() => {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // 初始化文件，兼容旧版单对象结构
+  // 确保默认配置存在于 configs 数组中（安全：apiKey 为空，需管理员手动配置）
+  function ensureDefaultConfig(data: IAiConfigStoreData): IAiConfigStoreData {
+    const hasDefault = data.configs.some(c => c.id === DEFAULT_AI_CONFIG_ID);
+    if (!hasDefault) {
+      data.configs.unshift({
+        id: DEFAULT_AI_CONFIG_ID,
+        apiKey: '',
+        apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        model: 'openrouter/free',
+        createdAt: new Date().toISOString(),
+        isDefault: true,
+        displayModel: '默认模型',
+        displayApiUrl: 'https://localhost/api/v1/chat/completions',
+      });
+    }
+    return data;
+  }
+
+  // 初始化文件（支持旧版结构 → 新版：仅保留 configs 数组，激活状态由 users.json 管理）
   if (!fs.existsSync(filePath)) {
-    const initial: IAiConfigStoreData = { configs: [], activeId: null };
+    const initial: IAiConfigStoreData = ensureDefaultConfig({ configs: [] });
     fs.writeFileSync(filePath, JSON.stringify(initial, null, 2), 'utf-8');
   } else {
-    // 若旧版结构则迁移为新结构
+    // 迁移：任何旧版结构 → 新版（仅保留 configs 数组，忽略 activeId / activeByUser）
     try {
       const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      if (!raw || !('configs' in raw) || !('activeId' in raw)) {
-        const migrated: IAiConfigStoreData = {
+      let needsMigration = false;
+      let migrated: IAiConfigStoreData;
+
+      // 极旧版：单对象 { apiKey, apiUrl, model }
+      if (raw && !('configs' in raw)) {
+        migrated = {
           configs: raw?.apiKey
             ? [{
                 id: uuidv4(),
@@ -417,21 +543,41 @@ export const aiConfigStore = (() => {
                 createdAt: new Date().toISOString(),
               }]
             : [],
-          activeId: null,
         };
-        migrated.activeId = migrated.configs[0]?.id || null;
+        needsMigration = true;
+      }
+      // 旧版：有 configs + activeId/activeByUser → 保留 configs
+      else if (raw && 'configs' in raw) {
+        migrated = { configs: raw.configs || [] };
+        // 如果原始数据还有 activeByUser / activeId，那就是新旧结构差异 → 需要重写
+        needsMigration = 'activeByUser' in raw || 'activeId' in raw;
+      } else {
+        migrated = { configs: [] };
+        needsMigration = true;
+      }
+
+      // 确保默认配置存在
+      const beforeCount = migrated.configs.length;
+      migrated = ensureDefaultConfig(migrated);
+      if (migrated.configs.length !== beforeCount) {
+        needsMigration = true;
+      }
+
+      if (needsMigration) {
         fs.writeFileSync(filePath, JSON.stringify(migrated, null, 2), 'utf-8');
       }
     } catch {
       // 解析失败则重置
-      const initial: IAiConfigStoreData = { configs: [], activeId: null };
+      const initial: IAiConfigStoreData = ensureDefaultConfig({ configs: [] });
       fs.writeFileSync(filePath, JSON.stringify(initial, null, 2), 'utf-8');
     }
   }
 
   return {
     read(): IAiConfigStoreData {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as IAiConfigStoreData;
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as IAiConfigStoreData;
+      // 运行时也确保默认配置存在（防止手动删除）
+      return ensureDefaultConfig(data);
     },
     write(data: IAiConfigStoreData): void {
       fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
@@ -439,9 +585,8 @@ export const aiConfigStore = (() => {
   };
 })();
 
-// 当前激活的 AI 配置
+// 当前激活的 AI 配置（不再使用，保留旧接口用于兼容；新项目建议直接走 services/ai.ts）
 export function readActiveAiConfig(): IAiConfig | null {
   const data = aiConfigStore.read();
-  if (!data.activeId) return null;
-  return data.configs.find(c => c.id === data.activeId) || null;
+  return null;  // 按用户隔离后，全局 activeId 无意义；调用方应传入 userId
 }

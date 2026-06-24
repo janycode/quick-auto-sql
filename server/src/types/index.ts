@@ -6,6 +6,7 @@ export interface IConnection {
   username: string;
   password: string; // 加密存储
   database?: string;
+  userId: string;    // 所属用户
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +43,27 @@ export interface IColumn {
   autoIncrement: boolean;
 }
 
+export interface ITableStatus {
+  name: string;
+  engine: string | null;
+  version: number | null;
+  rowFormat: string | null;
+  rows: number | null;
+  avgRowLength: number | null;
+  dataLength: number | null;
+  maxDataLength: number | null;
+  indexLength: number | null;
+  dataFree: number | null;
+  autoIncrement: number | null;
+  createTime: string | null;
+  updateTime: string | null;
+  checkTime: string | null;
+  collation: string | null;
+  comment: string | null;
+  columnCount: number;
+  indexCount: number;
+}
+
 export interface IQueryResult {
   columns: string[];
   rows: Record<string, unknown>[];
@@ -62,6 +84,10 @@ export interface IAiConfig {
   apiUrl: string;
   model: string;
   createdAt: string;
+  isDefault?: boolean;
+  displayModel?: string;
+  displayApiUrl?: string;
+  ownerName?: string;        // 所属用户显示名（仅 admin 可见）
 }
 
 // AI 配置新增入参
@@ -71,10 +97,9 @@ export interface IAiConfigCreate {
   model: string;
 }
 
-// AI 配置存储（含 activeId）
+// AI 配置存储（纯配置库：不再记录用户激活关系，由 users.json 的 aiConfigs 处理）
 export interface IAiConfigStoreData {
   configs: IAiConfig[];
-  activeId: string | null;
 }
 
 export interface IAiGenerateRequest {
@@ -82,6 +107,7 @@ export interface IAiGenerateRequest {
   database: string;
   tables: string[];
   question: string;
+  messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
 export interface IAiHistory {
@@ -91,6 +117,7 @@ export interface IAiHistory {
   tables: string[];
   question: string;
   sql: string;
+  userId: string;      // 所属用户
   createdAt: string;
 }
 
@@ -132,13 +159,70 @@ export interface IPromptTemplate {
   updatedAt: string;
 }
 
+// ==================== 套餐 & 配额 ====================
+export type PlanType = 'free' | 'pro' | 'team' | 'enterprise';
+
+export interface IUsageRecord {
+  userId: string;
+  date: string;        // YYYY-MM-DD
+  aiGenerateOwnKey: number;
+  aiGeneratePlatform: number;
+  aiAnalyze: number;
+  sqlExecute: number;
+  updatedAt: string;
+}
+
+export interface IQuotaUsage {
+  used: number;
+  limit: number;       // -1 表示无限
+}
+
+export interface IQuotaInfo {
+  plan: PlanType;
+  planExpiresAt?: string;
+  aiGenerateOwnKey: IQuotaUsage;
+  aiGeneratePlatform: IQuotaUsage;
+  aiAnalyze: IQuotaUsage;
+  sqlExecute: IQuotaUsage;
+  historyLimit: number;
+  historyUsed: number;
+  hasCustomPrompts: boolean;
+  trialUsed?: boolean;
+}
+
 // ==================== 用户登录 ====================
+export type UserRole = 'admin' | 'editor' | 'viewer';
+
+// 用户可访问的 AI 配置条目
+// state: 1 表示"使用中"，0 表示"可用但未使用"
+export interface IUserAiConfig {
+  id: string;
+  state: 0 | 1;
+}
+
 export interface IUser {
   id: string;
   email?: string;          // 新注册用户：邮箱（账号）
   username?: string;       // 旧用户兼容：保留 username 用于旧数据
   passwordHash: string;
   emailVerified: boolean;
+  role: UserRole;
+  createdAt: string;
+  aiConfigs: IUserAiConfig[];  // 该用户可用的 AI 配置列表及激活状态
+  plan?: PlanType;
+  planExpiresAt?: string;
+  trialUsed?: boolean;
+}
+
+// 审计日志
+export interface IAuditLog {
+  id: string;
+  userId: string;
+  username: string;
+  action: string;
+  target: string;
+  details: string;
+  ip: string;
   createdAt: string;
 }
 
@@ -173,4 +257,27 @@ export interface IAuthSession {
   username: string;
   createdAt: string;
   expiresAt: string;
+}
+
+// ==================== 反馈 ====================
+export type FeedbackType = 'bug' | 'suggestion' | 'security' | 'other';
+export type FeedbackStatus = 'pending' | 'processing' | 'resolved' | 'rejected';
+
+export interface IFeedback {
+  id: string;
+  type: FeedbackType;
+  description: string;
+  email?: string;
+  userId?: string;
+  username?: string;
+  status: FeedbackStatus;
+  reply?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IFeedbackCreate {
+  type: FeedbackType;
+  description: string;
+  email?: string;
 }

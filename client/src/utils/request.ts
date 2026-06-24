@@ -164,7 +164,9 @@ function showMysqlUnavailableDialog() {
     })
 }
 
-function handleUnauthorizedIfNeeded(response: { status?: number; data?: any }, silent?: boolean) {
+function handleUnauthorizedIfNeeded(response: { status?: number; data?: any }, silent?: boolean, loginLike?: boolean) {
+  // 登录/注册请求不需要"未登录处理"（账号密码错误属于业务错
+  if (loginLike) return false
   const status = response?.status
   const code = response?.data?.code
   const isUnauthorized = status === 401 || code === 401
@@ -203,14 +205,21 @@ request.interceptors.response.use(
   (response) => {
     const { data, config } = response
     if (data && data.code !== 0) {
-      // 未登录优先处理
-      if (handleUnauthorizedIfNeeded({ status: response.status, data }, config._silentError)) {
+      // 未登录优先处理；登录/注册请求不视为"会话失效"
+      const url = typeof config.url === 'string' ? config.url : ''
+      const loginLike = /\/auth\/(login|register)(\/|$|\?)/.test(url) ||
+        /\/auth\/email\/(send-code|check)(\/|$|\?)/.test(url)
+      if (!loginLike && handleUnauthorizedIfNeeded({ status: response.status, data }, config._silentError)) {
         return Promise.reject(new Error(data.message || '未登录'))
       }
       // MySQL 不可用：优先弹蒙版提示，不再使用普通 ElMessage
       if (data.code === MYSQL_UNAVAILABLE_CODE && shouldTriggerMysqlUnavailableDialog(config)) {
         showMysqlUnavailableDialog()
         return Promise.reject(new Error(data.message || '未发现可用的mysql服务，请启动服务后刷新重试'))
+      }
+      // 429 配额超限
+      if (data.code === 429 && data.data?.upgradeHint) {
+        window.dispatchEvent(new CustomEvent('quota-limit-exceeded', { detail: data.data }))
       }
       if (!config._silentError) {
         const display = friendlyErrorMessage(data.message || '请求失败')
@@ -221,10 +230,55 @@ request.interceptors.response.use(
     return data
   },
   (error) => {
-    // 401 等状态码错误走这里
-    if (handleUnauthorizedIfNeeded({ status: error.response?.status, data: error.response?.data }, error.config?._silentError)) {
+    // 401 等状态码错误走这里；登录/注册请求不视为"会话失效"
+    const url = typeof error.config?.url === 'string' ? error.config.url : ''
+    const loginLike = /\/auth\/(login|register)(\/|$|\?)/.test(url) ||
+      /\/auth\/email\/(send-code|check)(\/|$|\?)/.test(url)
+    if (!loginLike && handleUnauthorizedIfNeeded({ status: error.response?.status, data: error.response?.data }, error.config?._silentError)) {
       return Promise.reject(error)
     }
+
+    // 处理服务不可用的情况（502/503/504/ECONNREFUSED）- 代理/后端未启动
+    const status = error.response?.status
+    const isServiceUnavailable =
+      status === 502 || status === 503 || status === 504 ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ECONNRESET' ||
+      error.code === 'ETIMEDOUT'
+
+    if (isServiceUnavailable) {
+      if (!error.config?._silentError) {
+        const hintMap: Record<number, string> = {
+          502: '后端服务未启动或无响应，请先启动后端服务后再试',
+          503: '后端服务暂不可用，请稍后再试',
+          504: '后端服务响应超时，请稍后再试',
+        }
+        const hint = hintMap[status] || '网络连接失败，请检查后端服务是否正常启动'
+        ElMessageBox.alert(hint, '服务不可用', {
+          confirmButtonText: '我知道了',
+          type: 'warning',
+          showClose: false,
+        }).catch(() => {})
+      }
+      return Promise.reject(error)
+    }
+
+    // 429 Too Many Requests: 被限流（含配额超限）
+    if (status === 429) {
+      if (!error.config?._silentError) {
+        const data = error.response?.data
+        const message = data?.message || '请求过于频繁，请稍后再试'
+        const isQuotaExceeded = data?.data?.upgradeHint === true
+        if (isQuotaExceeded) {
+          ElMessage.warning(message)
+          window.dispatchEvent(new CustomEvent('quota-limit-exceeded', { detail: data?.data }))
+        } else {
+          ElMessage.warning(message)
+        }
+      }
+      return Promise.reject(error)
+    }
+
     const data = error.response?.data
     const rawMessage = data?.message || error.message || '网络错误'
 

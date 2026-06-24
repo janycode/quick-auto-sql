@@ -42,25 +42,30 @@ export function getPool(connection: IConnection): mysql.Pool {
   return pool;
 }
 
-// 获取连接池（通过 connectionId）
-export function getPoolById(connectionId: string): mysql.Pool | null {
-  const connection = connectionStore.findById(connectionId) as IConnection | undefined;
+// 获取连接池（通过 connectionId + userId，校验归属）
+export function getPoolById(connectionId: string, userId?: string): mysql.Pool | null {
+  const connection = getConnectionById(connectionId, userId);
   if (!connection) return null;
   return getPool(connection);
 }
 
-// 获取连接信息
-export function getConnectionById(connectionId: string): IConnection | undefined {
-  return connectionStore.findById(connectionId) as IConnection | undefined;
+// 获取连接信息（校验归属）
+export function getConnectionById(connectionId: string, userId?: string): IConnection | undefined {
+  const raw = connectionStore.findById(connectionId) as IConnection | undefined;
+  if (!raw) return undefined;
+  if (userId && raw.userId !== userId) return undefined;
+  return raw;
 }
 
-// 获取所有连接
-export function getAllConnections(): IConnection[] {
-  return connectionStore.read() as IConnection[];
+// 获取所有连接（按用户隔离）
+export function getAllConnections(userId?: string): IConnection[] {
+  const items = connectionStore.read() as IConnection[];
+  if (!userId) return items;
+  return items.filter((c) => c.userId === userId);
 }
 
-// 创建连接
-export function createConnection(data: IConnectionCreate): IConnection {
+// 创建连接（绑定用户）
+export function createConnection(data: IConnectionCreate, userId?: string): IConnection {
   const now = new Date().toISOString();
   const connection: IConnection = {
     id: uuidv4(),
@@ -70,19 +75,19 @@ export function createConnection(data: IConnectionCreate): IConnection {
     username: data.username,
     password: encryptPassword(data.password),
     database: data.database,
+    userId: userId || '',
     createdAt: now,
     updatedAt: now,
   };
-  connectionStore.insert(connection);
+  connectionStore.insert(connection as any);
   return connection;
 }
 
-// 更新连接
-export function updateConnection(id: string, data: Partial<IConnectionCreate>): IConnection | null {
-  const existing = connectionStore.findById(id) as IConnection | undefined;
+// 更新连接（校验归属）
+export function updateConnection(id: string, data: Partial<IConnectionCreate>, userId?: string): IConnection | null {
+  const existing = getConnectionById(id, userId);
   if (!existing) return null;
 
-  // 如果修改了连接信息，需要清除缓存的连接池
   const connectionFieldsChanged = data.host || data.port || data.username || data.password || data.database;
   if (connectionFieldsChanged) {
     removePool(id);
@@ -93,11 +98,13 @@ export function updateConnection(id: string, data: Partial<IConnectionCreate>): 
     updates.password = encryptPassword(data.password);
   }
 
-  return connectionStore.update(id, updates) as IConnection | null;
+  return connectionStore.update(id, updates as any) as IConnection | null;
 }
 
-// 删除连接
-export function deleteConnection(id: string): boolean {
+// 删除连接（校验归属）
+export function deleteConnection(id: string, userId?: string): boolean {
+  const existing = getConnectionById(id, userId);
+  if (!existing) return false;
   removePool(id);
   return connectionStore.delete(id);
 }
@@ -154,9 +161,9 @@ export async function testConnection(data: IConnectionCreate): Promise<boolean> 
   }
 }
 
-// 测试已保存的连接
-export async function testSavedConnection(id: string): Promise<boolean> {
-  const connection = connectionStore.findById(id) as IConnection | undefined;
+// 测试已保存的连接（按用户校验归属）
+export async function testSavedConnection(id: string, userId?: string): Promise<boolean> {
+  const connection = getConnectionById(id, userId);
   if (!connection) throw new Error('连接不存在');
 
   let tempConnection: mysql.Connection | null = null;

@@ -23,6 +23,27 @@ export interface IColumn {
   autoIncrement: boolean
 }
 
+export interface ITableStatus {
+  name: string
+  engine: string | null
+  version: number | null
+  rowFormat: string | null
+  rows: number | null
+  avgRowLength: number | null
+  dataLength: number | null
+  maxDataLength: number | null
+  indexLength: number | null
+  dataFree: number | null
+  autoIncrement: number | null
+  createTime: string | null
+  updateTime: string | null
+  checkTime: string | null
+  collation: string | null
+  comment: string | null
+  columnCount: number
+  indexCount: number
+}
+
 // 获取数据库列表
 export function getDatabases(connectionId: string) {
   return request.get<any, { code: number; data: IDatabase[] }>('/databases', { params: { connectionId } })
@@ -41,4 +62,9 @@ export function getColumns(connectionId: string, database: string, table: string
 // 获取表 DDL
 export function getTableDDL(connectionId: string, database: string, table: string) {
   return request.get<any, { code: number; data: string }>('/databases/ddl', { params: { connectionId, database, table } })
+}
+
+// 获取表状态信息
+export function getTableStatus(connectionId: string, database: string, table: string) {
+  return request.get<any, { code: number; data: ITableStatus }>('/databases/table-status', { params: { connectionId, database, table } })
 }

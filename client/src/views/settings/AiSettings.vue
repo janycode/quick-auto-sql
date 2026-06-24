@@ -25,10 +25,15 @@
               <div class="config-info">
                 <div class="config-url">
                   <span class="model-tag">{{ item.model }}</span>
+                  <span v-if="item.isDefault" class="default-tag">默认配置</span>
                   <span class="url-text" :title="item.apiUrl">{{ item.apiUrl }}</span>
                 </div>
                 <div class="config-key">
-                  API Key: {{ maskApiKey(item.apiKey) }}
+                  {{ item.isDefault ? '默认配置（系统内置）' : `API Key: ${maskApiKey(item.apiKey)}` }}
+                </div>
+                <div v-if="item.ownerName" class="config-owner">
+                  <el-icon><User /></el-icon>
+                  <span>{{ item.ownerName }}</span>
                 </div>
               </div>
               <div class="config-actions">
@@ -42,6 +47,7 @@
                 >
                   测试连接
                 </el-button>
+                <!-- 只有当前激活配置才显示「使用中」，其他显示「使用」按钮 -->
                 <el-tag
                   v-if="configStore.activeId === item.id"
                   type="success"
@@ -59,7 +65,9 @@
                 >
                   使用
                 </el-button>
+                <!-- 默认配置：不显示删除按钮 -->
                 <el-button
+                  v-if="!item.isDefault"
                   type="danger"
                   size="small"
                   link
@@ -198,7 +206,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, WarningFilled, Check, InfoFilled, Connection } from '@element-plus/icons-vue'
+import { Delete, WarningFilled, Check, InfoFilled, Connection, User } from '@element-plus/icons-vue'
 import type { IAiProvider, IAiConfig } from '@/api/ai'
 import * as aiApi from '@/api/ai'
 import AppHeader from '@/components/layout/AppHeader.vue'
@@ -358,7 +366,15 @@ async function handleAdd() {
 }
 
 // 共享：AI API 连接测试（走后端代理，避免浏览器 CORS）
-async function testConnection(params: { apiKey: string; apiUrl: string; model: string }) {
+// - 如果传 configId：走后端内置默认配置（不暴露 API Key）
+// - 如果传 apiKey/apiUrl/model：走自定义配置
+async function testConnection(params: { apiKey?: string; apiUrl?: string; model?: string; configId?: string }) {
+  // 方式一：测试默认配置（通过 configId，后端安全地调用）
+  if (params.configId) {
+    await aiApi.testAiConnection({ configId: params.configId })
+    return
+  }
+  // 方式二：测试自定义配置（用户输入 API Key）
   const { apiKey, apiUrl, model } = params
   if (!apiKey) {
     throw new Error('API Key 不能为空')
@@ -366,22 +382,24 @@ async function testConnection(params: { apiKey: string; apiUrl: string; model: s
   if (!apiUrl) {
     throw new Error('API URL 不能为空')
   }
-  await aiApi.testAiConnection({
-    apiKey,
-    apiUrl,
-    model,
-  })
+  await aiApi.testAiConnection({ apiKey, apiUrl, model })
 }
 
 // 测试保存的配置
+// - 默认配置：走 configId（后端不暴露 Key，更安全）
+// - 用户自建配置：走 apiKey/apiUrl/model
 async function handleTestConfig(config: IAiConfig) {
   testingId.value = config.id
   try {
-    await testConnection({
-      apiKey: config.apiKey,
-      apiUrl: config.apiUrl,
-      model: config.model,
-    })
+    if (config.isDefault) {
+      await testConnection({ configId: config.id })
+    } else {
+      await testConnection({
+        apiKey: config.apiKey,
+        apiUrl: config.apiUrl,
+        model: config.model,
+      })
+    }
     ElMessage.success('连接成功')
   } catch (err: any) {
     ElMessage.error(`连接失败: ${err.message}`)
@@ -518,6 +536,18 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+.default-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  background: #f0f9eb;
+  color: #67c23a;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
 .url-text {
   font-size: 13px;
   color: #303133;
@@ -530,6 +560,19 @@ onMounted(async () => {
   font-size: 12px;
   color: #909399;
   font-family: 'JetBrains Mono', Consolas, 'Monaco', monospace;
+}
+
+.config-owner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+
+  .el-icon {
+    color: #409eff;
+  }
 }
 
 .config-actions {

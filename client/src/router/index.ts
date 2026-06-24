@@ -43,10 +43,28 @@ const router = createRouter({
       meta: { title: 'AI 配置' },
     },
     {
+      path: '/pricing',
+      name: 'Pricing',
+      component: () => import('@/views/pricing/Pricing.vue'),
+      meta: { public: true, title: '定价' },
+    },
+    {
       path: '/settings/prompts',
       name: 'PromptSettings',
       component: () => import('@/views/settings/PromptSettings.vue'),
       meta: { title: '提示词配置', adminOnly: true },
+    },
+    {
+      path: '/settings/feedback',
+      name: 'FeedbackAdmin',
+      component: () => import('@/views/settings/FeedbackAdmin.vue'),
+      meta: { title: '反馈管理' },
+    },
+    {
+      path: '/payment',
+      name: 'Payment',
+      component: () => import('@/views/payment/Payment.vue'),
+      meta: { title: '支付' },
     },
   ],
 })
