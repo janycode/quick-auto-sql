@@ -1,13 +1,33 @@
-import { Router, Response } from 'express';
+import { Router, Response, Request } from 'express';
 import { asyncHandler, success, fail } from '../middleware/async-handler';
 import { requireAuth, requireAdmin, optionalAuth, AuthRequest } from '../middleware/auth';
+import { rateLimit } from '../middleware/security';
 import * as feedbackService from '../services/feedback';
+import { sendFeedbackNotification } from '../services/email';
+import { config } from '../config';
 import type { FeedbackStatus, FeedbackType } from '../types';
 
 const router = Router();
 
+const feedbackRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: '反馈提交过于频繁，请稍后再试',
+  keyGenerator: (req) => `feedback:${req.ip || 'unknown'}`,
+});
+
+function getBaseUrl(req: Request): string {
+  const origin = req.headers['origin'];
+  if (typeof origin === 'string' && origin) {
+    return origin;
+  }
+  const host = req.headers['host'];
+  const protocol = req.protocol || 'http';
+  return host ? `${protocol}://${host}` : '';
+}
+
 // 提交反馈（公开接口，登录用户会自动关联用户信息）
-router.post('/', optionalAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post('/', optionalAuth, feedbackRateLimit, asyncHandler(async (req: AuthRequest, res: Response) => {
   const { type, description, email } = req.body;
   if (!type || !description) {
     return fail(res, '问题类型和描述不能为空', 400);
@@ -16,11 +36,24 @@ router.post('/', optionalAuth, asyncHandler(async (req: AuthRequest, res: Respon
   if (!validTypes.includes(type)) {
     return fail(res, '无效的问题类型', 400);
   }
+  if (String(description).length > 2000) {
+    return fail(res, '反馈描述不能超过 2000 字符', 400);
+  }
   const feedback = feedbackService.createFeedback(
     { type, description, email },
     req.auth?.userId,
     req.auth?.username,
   );
+
+  const baseUrl = getBaseUrl(req);
+  setImmediate(async () => {
+    try {
+      await sendFeedbackNotification(feedback, config.adminEmail, baseUrl);
+    } catch (e) {
+      console.error('[FEEDBACK] 通知邮件发送失败', e);
+    }
+  });
+
   success(res, feedback, '反馈提交成功');
 }));
 

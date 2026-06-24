@@ -3,7 +3,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import SHA256 from 'crypto-js/sha256';
 import { config } from '../config';
-import type { IUser, IAuthSession, IUserAiConfig } from '../types';
+import type { IUser, IAuthSession, IUserAiConfig, UserRole, PlanType } from '../types';
 // 注意：避免循环依赖（ai.ts 依赖本文件），这里直接硬编码默认配置 ID
 const DEFAULT_AI_CONFIG_ID = 'default-openrouter';
 import { sendEmailCode } from './email';
@@ -161,14 +161,17 @@ export function updateUserAiConfigs(userId: string, aiConfigs: IUserAiConfig[]):
   return true;
 }
 
+const DEFAULT_ADMIN_EMAIL = 'yuan62387@qq.com';
+
 function ensureDefaultUser(): void {
   const users = readUsers();
   if (!users.find(u => u.username === DEFAULT_USERNAME)) {
     users.push({
       id: uuidv4(),
       username: DEFAULT_USERNAME,
+      email: DEFAULT_ADMIN_EMAIL,
       passwordHash: hashPassword(DEFAULT_PASSWORD),
-      emailVerified: false,
+      emailVerified: true,
       role: 'admin',
       plan: 'enterprise',
       createdAt: new Date().toISOString(),
@@ -176,7 +179,7 @@ function ensureDefaultUser(): void {
     });
     writeUsers(users);
   }
-  // 为旧用户补齐 role 和 plan 字段
+  // 为旧用户补齐 role、plan、email 字段
   let changed = false;
   for (const user of users) {
     if (!user.role) {
@@ -185,6 +188,11 @@ function ensureDefaultUser(): void {
     }
     if (user.username === DEFAULT_USERNAME && !user.plan) {
       user.plan = 'enterprise';
+      changed = true;
+    }
+    if (user.username === DEFAULT_USERNAME && !user.email) {
+      user.email = DEFAULT_ADMIN_EMAIL;
+      user.emailVerified = true;
       changed = true;
     }
   }
@@ -450,4 +458,78 @@ export function createUser(email: string, password: string): ICreateUserResult {
   users.push(user);
   writeUsers(users);
   return { user };
+}
+
+// ==================== 个人资料 ====================
+
+export interface IUserProfile {
+  id: string;
+  email?: string;
+  username?: string;
+  nickname?: string;
+  avatar?: string;
+  bio?: string;
+  role: UserRole;
+  emailVerified: boolean;
+  plan?: PlanType;
+  planExpiresAt?: string;
+  createdAt: string;
+}
+
+export function getUserProfile(userId: string): IUserProfile | null {
+  const user = findUserById(userId);
+  if (!user) return null;
+  const { passwordHash, aiConfigs, trialUsed, ...rest } = user;
+  return rest as IUserProfile;
+}
+
+export interface IUpdateProfileData {
+  nickname?: string;
+  bio?: string;
+}
+
+export function updateUserProfile(userId: string, data: IUpdateProfileData): IUserProfile | null {
+  const users = readUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) return null;
+
+  if (data.nickname !== undefined) {
+    const trimmed = data.nickname.trim();
+    if (trimmed.length > 50) {
+      throw new Error('昵称长度不能超过 50 个字符');
+    }
+    users[idx].nickname = trimmed || undefined;
+  }
+  if (data.bio !== undefined) {
+    const trimmed = data.bio.trim();
+    if (trimmed.length > 200) {
+      throw new Error('个人简介长度不能超过 200 个字符');
+    }
+    users[idx].bio = trimmed || undefined;
+  }
+
+  writeUsers(users);
+  const { passwordHash, aiConfigs, trialUsed, ...rest } = users[idx];
+  return rest as IUserProfile;
+}
+
+// ==================== 修改密码 ====================
+
+export function changePassword(userId: string, oldPassword: string, newPassword: string): boolean {
+  const users = readUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) return false;
+
+  if (hashPassword(oldPassword) !== users[idx].passwordHash) {
+    throw new Error('原密码错误');
+  }
+
+  const pw = validatePassword(newPassword);
+  if (!pw.ok) {
+    throw new Error(pw.reason || '新密码不符合要求');
+  }
+
+  users[idx].passwordHash = hashPassword(newPassword);
+  writeUsers(users);
+  return true;
 }

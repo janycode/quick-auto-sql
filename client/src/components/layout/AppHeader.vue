@@ -58,13 +58,18 @@
         <QuotaBar @showUpgrade="showUpgradeDialog = true" />
         <el-dropdown trigger="click" @command="onDropdownCommand" class="user-dropdown">
           <div class="user-info">
-            <el-avatar :size="30" :icon="User" />
+            <el-avatar :size="30" :src="avatarUrl">
+              <el-icon :size="18"><User /></el-icon>
+            </el-avatar>
             <span class="username">{{ username || '未登录' }}</span>
           </div>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item disabled>
                 <el-icon><User /></el-icon>{{ username || '未登录' }}
+              </el-dropdown-item>
+              <el-dropdown-item command="profile">
+                <el-icon><Setting /></el-icon>个人中心
               </el-dropdown-item>
               <el-dropdown-item divided command="logout">
                 <el-icon><SwitchButton /></el-icon>退出登录
@@ -92,7 +97,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, SwitchButton, Sunny, Moon, Monitor, ChatDotRound } from '@element-plus/icons-vue'
+import { User, SwitchButton, Sunny, Moon, Monitor, ChatDotRound, Setting } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { getFeedbackPendingCount } from '@/api/feedback'
@@ -115,12 +120,21 @@ const isPricing = computed(() => route.path === '/pricing')
 const username = computed(() => userStore.username)
 const isAdmin = computed(() => userStore.isAdmin)
 
+const avatarUrl = computed(() => {
+  const name = encodeURIComponent(username.value || 'U')
+  return `https://ui-avatars.com/api/?name=${name}&background=random&color=fff&bold=true`
+})
+
 const themeTooltip = computed(() => {
   const map = { light: '切换为深色模式', dark: '切换为跟随系统', system: '切换为浅色模式' }
   return map[themeStore.mode] || '切换主题'
 })
 
 async function onDropdownCommand(cmd: string) {
+  if (cmd === 'profile') {
+    router.push('/settings/profile')
+    return
+  }
   if (cmd === 'logout') {
     try {
       await ElMessageBox.confirm('确定要退出登录吗？', '退出登录', {

@@ -44,4 +44,5 @@ export const config = {
     from: process.env.SMTP_FROM || 'Quick Auto SQL <no-reply@example.com>',
     devMode: parseBool(process.env.EMAIL_DEV_MODE, true),
   },
+  adminEmail: process.env.ADMIN_EMAIL || 'yuan62387@qq.com',
 };

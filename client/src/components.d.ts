@@ -54,6 +54,7 @@ declare module 'vue' {
     QuotaBar: typeof import('./components/quota/QuotaBar.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SettingsPage: typeof import('./components/settings/SettingsPage.vue')['default']
     SqlEditor: typeof import('./components/editor/SqlEditor.vue')['default']
     TableInfo: typeof import('./components/database/TableInfo.vue')['default']
     TableSelector: typeof import('./components/ai/TableSelector.vue')['default']
