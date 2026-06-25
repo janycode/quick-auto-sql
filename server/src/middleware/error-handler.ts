@@ -1,17 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-
-// MySQL 连接失败的关键字段（mysql2 / Node 底层错误常见形态）
-// 当 MySQL 未启动、host 不可达、端口被拒、认证失败时均会命中
-const MYSQL_UNAVAILABLE_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ETIMEDOUT',
-  'PROTOCOL_CONNECTION_LOST',
-  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
-]);
+import { MYSQL_UNAVAILABLE_CODES } from '../utils/mysql-error';
 
 // 错误码约定：-1 通用错误，其它业务错误可自行扩展
 // 1001: MySQL 不可用 / 连接失败

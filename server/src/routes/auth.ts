@@ -143,7 +143,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
 
-  const user = verifyUser(username, password);
+  const user = await verifyUser(username, password);
   if (!user) {
     fail(res, '账号或密码错误', 401, 401);
     return;
@@ -242,7 +242,7 @@ router.put('/password', requireAuth, asyncHandler(async (req: AuthRequest, res: 
     return;
   }
   try {
-    changePassword(userId, String(oldPassword), String(newPassword));
+    await changePassword(userId, String(oldPassword), String(newPassword));
     success(res, null, '密码修改成功');
   } catch (e: any) {
     fail(res, e?.message || '密码修改失败', 400, 400);

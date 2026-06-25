@@ -1,8 +1,30 @@
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import CryptoJS from 'crypto-js';
 import { config } from '../config';
 import { IAiConfig, IAiConfigStoreData, IAiHistory, IPromptTemplate, IPromptTemplateType } from '../types';
+
+function encryptValue(value: string): string {
+  if (!config.encryptKey) return value;
+  return CryptoJS.AES.encrypt(value, config.encryptKey).toString();
+}
+
+function decryptValue(value: string): string {
+  if (!config.encryptKey) return value;
+  try {
+    const bytes = CryptoJS.AES.decrypt(value, config.encryptKey);
+    const result = bytes.toString(CryptoJS.enc.Utf8);
+    return result || value;
+  } catch {
+    return value;
+  }
+}
+
+function isEncrypted(value: string): boolean {
+  if (!config.encryptKey) return false;
+  return value.startsWith('U2FsdGVkX1');
+}
 
 // ==================== 默认提示词模板 ====================
 
@@ -210,6 +232,7 @@ export function resetPromptTemplate(type: IPromptTemplateType): IPromptTemplate 
 
 export class JsonStore<T = unknown> {
   private filePath: string;
+  private lock: Promise<void> = Promise.resolve();
 
   constructor(fileName: string) {
     this.filePath = path.join(config.dataDir, fileName);
@@ -226,13 +249,36 @@ export class JsonStore<T = unknown> {
     }
   }
 
+  private withLock<R>(fn: () => R): R {
+    // 同步操作：简单串行化（适合单实例场景）
+    return fn();
+  }
+
+  async withLockAsync<R>(fn: () => Promise<R>): Promise<R> {
+    return new Promise<R>((resolve, reject) => {
+      this.lock = this.lock.then(async () => {
+        try {
+          resolve(await fn());
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  }
+
   read(): T[] {
-    const content = fs.readFileSync(this.filePath, 'utf-8');
-    return JSON.parse(content) as T[];
+    return this.withLock(() => {
+      const content = fs.readFileSync(this.filePath, 'utf-8');
+      return JSON.parse(content) as T[];
+    });
   }
 
   write(data: T[]): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
+    this.withLock(() => {
+      const tmpPath = this.filePath + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.filePath);
+    });
   }
 
   findById(id: string): T | undefined {
@@ -577,10 +623,25 @@ export const aiConfigStore = (() => {
     read(): IAiConfigStoreData {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as IAiConfigStoreData;
       // 运行时也确保默认配置存在（防止手动删除）
-      return ensureDefaultConfig(data);
+      const result = ensureDefaultConfig(data);
+      // 解密 API Key
+      for (const cfg of result.configs) {
+        if (cfg.apiKey && isEncrypted(cfg.apiKey)) {
+          cfg.apiKey = decryptValue(cfg.apiKey);
+        }
+      }
+      return result;
     },
     write(data: IAiConfigStoreData): void {
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      // 加密 API Key 后写入
+      const toWrite = {
+        ...data,
+        configs: data.configs.map(cfg => ({
+          ...cfg,
+          apiKey: cfg.apiKey && !isEncrypted(cfg.apiKey) ? encryptValue(cfg.apiKey) : cfg.apiKey,
+        })),
+      };
+      fs.writeFileSync(filePath, JSON.stringify(toWrite, null, 2), 'utf-8');
     },
   };
 })();

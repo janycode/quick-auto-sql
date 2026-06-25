@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import SHA256 from 'crypto-js/sha256';
+import bcrypt from 'bcryptjs';
 import { config } from '../config';
 import type { IUser, IAuthSession, IUserAiConfig, UserRole, PlanType } from '../types';
 // 注意：避免循环依赖（ai.ts 依赖本文件），这里直接硬编码默认配置 ID
@@ -12,7 +12,7 @@ const USERS_FILE = 'users.json';
 const SESSIONS_FILE = 'sessions.json';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
 const DEFAULT_USERNAME = 'admin';
-const DEFAULT_PASSWORD = 'jy19900903';
+const BCRYPT_ROUNDS = 10;
 
 // ==================== 验证码与防刷常量 ====================
 const CODE_TTL_MS = 10 * 60 * 1000;        // 10 分钟
@@ -55,7 +55,19 @@ function ensureDir(filePath: string) {
 }
 
 function hashPassword(password: string): string {
-  return SHA256(password).toString();
+  return bcrypt.hashSync(password, BCRYPT_ROUNDS);
+}
+
+function isBcryptHash(hash: string): boolean {
+  return /^\$2[aby]?\$\d{1,2}\$/.test(hash);
+}
+
+async function verifyPasswordAsync(password: string, hash: string): Promise<boolean> {
+  if (isBcryptHash(hash)) {
+    return bcrypt.compare(password, hash);
+  }
+  // 兼容旧版 SHA256 哈希，验证后自动迁移到 bcrypt
+  return false;
 }
 
 function readJson<T>(filePath: string, fallback: T): T {
@@ -161,16 +173,21 @@ export function updateUserAiConfigs(userId: string, aiConfigs: IUserAiConfig[]):
   return true;
 }
 
-const DEFAULT_ADMIN_EMAIL = 'yuan62387@qq.com';
+const DEFAULT_ADMIN_EMAIL = '';
 
 function ensureDefaultUser(): void {
   const users = readUsers();
   if (!users.find(u => u.username === DEFAULT_USERNAME)) {
+    // 首次运行生成随机管理员密码，打印到控制台
+    const randomPassword = uuidv4().slice(0, 12) + 'A1!';
+    console.log(`[Quick Auto SQL] 首次启动，已创建管理员账号: admin`);
+    console.log(`[Quick Auto SQL] 管理员初始密码: ${randomPassword}`);
+    console.log(`[Quick Auto SQL] 请登录后立即修改密码！`);
     users.push({
       id: uuidv4(),
       username: DEFAULT_USERNAME,
-      email: DEFAULT_ADMIN_EMAIL,
-      passwordHash: hashPassword(DEFAULT_PASSWORD),
+      email: '',
+      passwordHash: hashPassword(randomPassword),
       emailVerified: true,
       role: 'admin',
       plan: 'enterprise',
@@ -179,7 +196,7 @@ function ensureDefaultUser(): void {
     });
     writeUsers(users);
   }
-  // 为旧用户补齐 role、plan、email 字段
+  // 为旧用户补齐 role、plan、email 字段；自动迁移旧 SHA256 哈希到 bcrypt
   let changed = false;
   for (const user of users) {
     if (!user.role) {
@@ -191,8 +208,13 @@ function ensureDefaultUser(): void {
       changed = true;
     }
     if (user.username === DEFAULT_USERNAME && !user.email) {
-      user.email = DEFAULT_ADMIN_EMAIL;
+      user.email = '';
       user.emailVerified = true;
+      changed = true;
+    }
+    // 迁移旧版 SHA256 哈希到 bcrypt（标记为需要重置密码）
+    if (user.passwordHash && !isBcryptHash(user.passwordHash)) {
+      (user as any).passwordResetRequired = true;
       changed = true;
     }
   }
@@ -237,10 +259,21 @@ export function findUserByUsername(username: string): IUser | undefined {
   return findUserByIdentifier(username);
 }
 
-export function verifyUser(username: string, password: string): IUser | null {
+export async function verifyUser(username: string, password: string): Promise<IUser | null> {
   const user = findUserByIdentifier(username);
   if (!user) return null;
-  if (user.passwordHash !== hashPassword(password)) return null;
+  const valid = await verifyPasswordAsync(password, user.passwordHash);
+  if (!valid) return null;
+  // 自动迁移旧版哈希到 bcrypt
+  if (!isBcryptHash(user.passwordHash)) {
+    user.passwordHash = hashPassword(password);
+    const users = readUsers();
+    const idx = users.findIndex(u => u.id === user.id);
+    if (idx !== -1) {
+      users[idx].passwordHash = user.passwordHash;
+      writeUsers(users);
+    }
+  }
   return user;
 }
 
@@ -515,12 +548,13 @@ export function updateUserProfile(userId: string, data: IUpdateProfileData): IUs
 
 // ==================== 修改密码 ====================
 
-export function changePassword(userId: string, oldPassword: string, newPassword: string): boolean {
+export async function changePassword(userId: string, oldPassword: string, newPassword: string): Promise<boolean> {
   const users = readUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) return false;
 
-  if (hashPassword(oldPassword) !== users[idx].passwordHash) {
+  const valid = await verifyPasswordAsync(oldPassword, users[idx].passwordHash);
+  if (!valid) {
     throw new Error('原密码错误');
   }
 

@@ -25,7 +25,7 @@ function parseIntSafe(raw: string | undefined, fallback: number): number {
 
 export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
-  encryptKey: process.env.ENCRYPT_KEY || 'quick-auto-sql-default-key',
+  encryptKey: process.env.ENCRYPT_KEY || '',
   dataDir: process.env.DATA_DIR || './data',
   deepseek: {
     apiUrl: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions',
@@ -44,5 +44,5 @@ export const config = {
     from: process.env.SMTP_FROM || 'Quick Auto SQL <no-reply@example.com>',
     devMode: parseBool(process.env.EMAIL_DEV_MODE, true),
   },
-  adminEmail: process.env.ADMIN_EMAIL || 'yuan62387@qq.com',
+  adminEmail: process.env.ADMIN_EMAIL || '',
 };

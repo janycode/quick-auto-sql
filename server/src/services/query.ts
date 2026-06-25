@@ -2,36 +2,14 @@ import mysql from 'mysql2/promise';
 import { IQueryResult } from '../types';
 import { getPoolById, getConnectionById } from './connection';
 import { config } from '../config';
+import { wrapMySqlError } from '../utils/mysql-error';
 
-// MySQL 连接失败相关错误码，命中时优先把原生 code 透传到 error-handler
-const MYSQL_UNAVAILABLE_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ETIMEDOUT',
-  'PROTOCOL_CONNECTION_LOST',
-  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
-]);
+// EXPLAIN 仅允许的 SQL 语句类型前缀
+const EXPLAIN_ALLOWED_PREFIXES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'];
 
-function wrapMySqlError(error: any): Error {
-  if (!error) return new Error('未知错误');
-  const code = String(error.code || '').toUpperCase();
-  const message = String(error.sqlMessage || error.message || '查询执行失败');
-
-  // 明确是 MySQL 不可用：把 code 透传（error-handler 会识别）
-  if (MYSQL_UNAVAILABLE_CODES.has(code) || /connect.*mysql|mysql.*connect|econnrefused/i.test(message)) {
-    const wrapped: any = new Error('未发现可用的mysql服务，请启动服务后刷新重试');
-    wrapped.code = 'MYSQL_UNAVAILABLE';
-    return wrapped;
-  }
-
-  // 其它业务错误（SQL 语法错误、表不存在等），保持原始语义
-  const wrapped: any = new Error(message);
-  if (error.code) wrapped.code = error.code;
-  if (error.errno !== undefined) wrapped.errno = error.errno;
-  return wrapped;
+function isExplainableSql(sql: string): boolean {
+  const trimmed = sql.trim().toUpperCase();
+  return EXPLAIN_ALLOWED_PREFIXES.some(p => trimmed.startsWith(p));
 }
 
 export async function executeQuery(
@@ -241,6 +219,10 @@ export async function explainQuery(
   }
   try {
     await conn.changeUser({ database });
+
+    if (!isExplainableSql(sql)) {
+      throw new Error('EXPLAIN 仅支持 SELECT、INSERT、UPDATE、DELETE 语句');
+    }
 
     const [result] = await conn.query({
       sql: `EXPLAIN ${sql}`,

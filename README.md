@@ -14,6 +14,7 @@
   - 自动注入选中表的完整结构信息（DDL + 字段注释），确保 SQL 字段准确
   - 自动拉取服务商模型列表，也可手动输入模型名
   - 多表关联时给出性能风险提示（超过 3 个表 join 时高亮警告）
+- **AI SQL 优化**：SSE 流式输出优化后的 SQL 语句
 - **多套 AI 配置**：可同时保存多组 API Key / Base URL / Model，一键切换激活配置
 - **AI 对话历史**：自动记录每次生成，支持按连接过滤、逐条删除、一键清空
 - **AI SQL 业务解释**：一键为当前 SQL 在首行生成中文业务含义注释（不影响原 SQL 缩进）
@@ -21,8 +22,11 @@
 - **分析历史 & 缓存**：相同 SQL 的分析结果会命中本地缓存（`cached` 标识），分析历史可随时回看与清空
 - **持久化状态**：连接选择、数据库选择、查询结果高度自动持久化到本地存储，刷新页面不丢失
 - **表勾选自动同步**：侧边栏勾选的表自动显示在 AI 助手关联表区域
-- **SQL 安全限制**：执行接口禁止 DDL / 权限操作（DROP、TRUNCATE、ALTER、GRANT、REVOKE）
-- **可自定义提示词**：支持在线编辑 `generate_sql / analyze_sql / explain_sql` 三类提示词模板，并可一键重置为默认
+- **SQL 安全限制**：执行接口禁止危险 DDL / 权限操作（DROP、TRUNCATE、GRANT、REVOKE）
+- **可自定义提示词**：支持在线编辑 `generate_sql / analyze_sql / explain_sql / optimize_sql` 四类提示词模板，并可一键重置为默认
+- **配额/套餐管理**：Free/Pro/Team/Enterprise 多级套餐，月度使用量限制
+- **用户反馈**：内置反馈系统，支持 Bug 报告和功能建议
+- **操作审计**：所有关键操作记录审计日志
 
 <img width="1921" height="1062" alt="image" src="https://github.com/user-attachments/assets/d4d2cda2-a29a-427e-a510-743b5d0efc6e" />
 <img width="906" height="853" alt="image" src="https://github.com/user-attachments/assets/191bb61d-8a80-4078-8f5b-715a3e61a200" />
@@ -35,10 +39,10 @@
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript + Vite + Vue Router + Pinia + Element Plus + Monaco Editor + Axios + dayjs + highlight.js |
-| 后端 | Node.js + TypeScript + Express + MySQL2 |
+| 前端 | Vue 3 + TypeScript + Vite + Vue Router + Pinia + Element Plus + Monaco Editor + Axios + dayjs + highlight.js + sql-formatter |
+| 后端 | Node.js + TypeScript + Express + MySQL2 + bcryptjs + crypto-js + nodemailer |
 | AI | 任意 OpenAI `/chat/completions` 兼容接口（内置 DeepSeek、LongCat，支持自定义） |
-| 数据存储 | 连接配置、AI 配置、AI 历史、提示词模板通过本地 JSON 文件持久化 |
+| 数据存储 | 连接配置、AI 配置、AI 历史、提示词模板等通过本地 JSON 文件持久化 |
 
 ## 📁 项目结构
 
@@ -46,28 +50,34 @@
 quick-auto-sql/
 ├── server/                      # 后端服务
 │   ├── src/
-│   │   ├── app.ts               # Express 入口 + /api/health 健康检查
-│   │   ├── config/              # 环境变量（端口、加密密钥、默认模型、默认提示词等）
-│   │   ├── routes/              # 4 个路由模块
+│   │   ├── app.ts               # Express 入口 + /api/health 健康检查 + 优雅关闭
+│   │   ├── config/              # 环境变量（端口、加密密钥、SMTP、查询限制等）
+│   │   ├── routes/              # 9 个路由模块
+│   │   │   ├── auth.ts          # 注册、登录、退出、个人资料、修改密码
 │   │   │   ├── connection.ts    # 连接管理（CRUD + 测试）
 │   │   │   ├── database.ts      # 数据库/表/字段浏览 + DDL
-│   │   │   ├── query.ts         # SQL 查询（含 DDL 拦截、EXPLAIN）
-│   │   │   └── ai.ts            # 服务商 / 多配置 / 历史 / 流式生成 / 分析 / 解释 / 提示词模板
-│   │   ├── services/            # 4 个服务模块（业务逻辑）
-│   │   ├── middleware/          # 错误处理 + async 包装
-│   │   ├── store/               # JSON 持久化（单对象→多配置的迁移、分析缓存、提示词存储）
-│   │   └── types/               # TypeScript 类型定义（Provider、Config、History、Prompt、Cache 等）
-│   └── data/                    # 运行时数据目录（自动创建）
+│   │   │   ├── query.ts         # SQL 查询 + 执行历史
+│   │   │   ├── ai.ts            # AI 配置 / 流式生成 / 优化 / 分析 / 解释 / 提示词模板
+│   │   │   ├── audit.ts         # 审计日志
+│   │   │   ├── quota.ts         # 配额/套餐
+│   │   │   ├── pay.ts           # 支付订单
+│   │   │   └── feedback.ts      # 用户反馈
+│   │   ├── services/            # 10 个服务模块（业务逻辑）
+│   │   ├── middleware/          # 5 个中间件（鉴权、限流、CSRF、配额、错误处理）
+│   │   ├── store/               # JSON 持久化 + 提示词模板 + 分析缓存 + 配额存储
+│   │   ├── utils/               # MySQL 错误码统一处理
+│   │   └── types/               # TypeScript 类型定义
+│   └── data/                    # 运行时数据目录（自动创建，含 12 个 JSON 文件）
 │
 └── client/                      # 前端应用
     └── src/
-        ├── api/                 # API 请求层（含 AI 服务商、多配置、历史、分析、解释、提示词等）
-        ├── stores/              # Pinia 状态管理（连接/数据库/AI 配置与生成）
-        ├── views/               # 工作区（含连接管理弹窗） / AI 设置
-        ├── components/          # 布局 / 数据库树 / SQL 编辑器 / 查询结果 / AiChat / TableSelector
-        ├── router/              # /workspace、/settings/ai
+        ├── api/                 # API 请求层（8 个模块）
+        ├── stores/              # Pinia 状态管理（7 个 store）
+        ├── views/               # 8 个视图目录
+        ├── components/          # 6 个组件目录（布局/数据库树/编辑器/AI/配额/设置）
+        ├── router/              # 路由配置
         ├── styles/              # 全局样式
-        └── utils/               # request / SSE / SQL 格式化
+        └── utils/               # request / SSE / SQL 格式化 / 套餐定义
 ```
 
 ## 🚀 快速开始
@@ -87,42 +97,42 @@ npm run dev
 # 服务启动在 http://localhost:3000
 ```
 
-可选：在 `server/.env` 中自定义以下配置（均有默认值，敏感值已脱敏，实际部署请替换为真实值）：
+可选：在 `server/.env` 中自定义以下配置（参考 `.env.example`）：
 
 ```dotenv
 # ==================== 服务 ====================
-# 后端服务监听端口
 PORT=3000
 
-# ==================== 加密 ====================
-# 数据库连接密码 AES 加密密钥（请替换为随机字符串，至少 16 位）
-ENCRYPT_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# ==================== 加密（必填） ====================
+# 数据库连接密码和 AI API Key 的 AES 加密密钥（请替换为随机字符串）
+ENCRYPT_KEY=your-random-secret-key
 
 # ==================== 数据目录 ====================
-# JSON 配置与历史数据存放目录（相对/绝对路径均可）
 DATA_DIR=./data
 
 # ==================== AI · 默认 DeepSeek ====================
-# 默认 chat completions 地址（也可在前端的 AI 配置中新增多套配置覆盖）
 DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
-# 默认模型
 DEEPSEEK_MODEL=deepseek-chat
 
+# ==================== CORS ====================
+# 允许的前端来源（逗号分隔，留空允许所有）
+CORS_ORIGINS=
+
 # ==================== SMTP · 邮件（可选） ====================
-# 未配置时系统运行在 EMAIL_DEV_MODE=true：邮件内容仅打印到控制台，不会真实发送
 SMTP_HOST=smtp.example.com
 SMTP_PORT=465
-# 是否启用 TLS：true / false（留空自动按端口推断）
 SMTP_SECURE=true
 SMTP_USER=your-smtp-username
 SMTP_PASS=your-smtp-password-or-api-key
-# 发件人显示名与地址
 SMTP_FROM="Quick Auto SQL <no-reply@example.com>"
-# 开发模式（true=只打印不发送；false=真实发送）
 EMAIL_DEV_MODE=true
+
+# ==================== 其他 ====================
+ADMIN_EMAIL=
+CSRF_SECRET=
 ```
 
-> 所有 `xxx_KEY / xxx_PASS / xxx_USER` 等敏感字段默认均有兜底空值或 `default-key` 占位，生产部署请务必替换为真实值并将 `server/.env` 加入 `.gitignore`。
+> **重要**：`ENCRYPT_KEY` 必须设置，否则数据库密码和 AI API Key 无法加密存储。生产部署请务必设置强随机密钥。
 
 ### 启动前端（开发环境 · 端口 5173）
 
@@ -141,18 +151,18 @@ pnpm dev
 
 ## 🐳 Docker 部署（生产环境 · 端口 13305 / 13306）
 
-为虚拟机（CentOS）提供一键部署脚本，前后端分两个容器运行。
+### 使用 docker-compose（推荐）
 
-### 架构
+```bash
+# 复制并编辑环境变量
+cp server/.env.example server/.env
+# 编辑 server/.env 设置 ENCRYPT_KEY 等
 
-| 组件 | 容器名 | 宿主机端口 | 容器内端口 |
-|------|--------|-----------|-----------|
-| 后端服务 | `quick-auto-sql-server` | **13305** | 13305 |
-| 前端应用 | `quick-auto-sql-client` | **13306** | 13306 |
+# 一键启动
+docker-compose up -d
+```
 
-前端容器内的 Nginx 会把 `/api/*` 请求反向代理到后端 `quick-auto-sql-server:13305`。
-
-### 部署步骤
+### 手动部署
 
 ```bash
 # 1. 部署后端
@@ -167,27 +177,12 @@ chmod +x docker.sh
 ```
 
 部署成功后：
-- 前端访问：`http://192.168.33.180:13306`
-- 后端健康检查：`http://192.168.33.180:13305/api/health`
+- 前端访问：`http://your-server:13306`
+- 后端健康检查：`http://your-server:13305/api/health`
 
 ### 数据持久化
 
-后端容器会挂载 `server/data/` 目录到容器内的 `/app/data`，连接配置、AI 配置、对话历史、提示词模板等 JSON 文件会持久化到宿主机，容器重启或重新构建不会丢失。
-
-### 自定义环境变量（可选）
-
-如需自定义 `ENCRYPT_KEY`、`DEEPSEEK_API_KEY` 等，编辑 `server/docker.sh` 中的 `docker run` 命令，追加 `-e` 参数：
-
-```bash
-docker run -d \
-  --name "quick-auto-sql-server" \
-  -p 13305:13305 \
-  -e ENCRYPT_KEY=your-encrypt-key \
-  -e DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions \
-  -v "$(pwd)/data:/app/data" \
-  --restart unless-stopped \
-  quick-auto-sql-server:latest
-```
+后端容器会挂载 `server/data/` 目录到容器内的 `/app/data`，所有 JSON 数据文件会持久化到宿主机。
 
 ## 📖 使用流程
 
@@ -196,10 +191,10 @@ docker run -d \
 3. **勾选表** → 在左侧树形结构中勾选需要查询的表（表会自动同步到右侧 AI 面板；超过 3 个表会有 join 性能风险提示）
 4. **AI 生成 SQL** → 右侧 AI 助手中输入自然语言描述，点击"生成 SQL"，表结构信息会自动注入提示词
 5. **使用 SQL** → 生成完成后点击"使用此 SQL"，SQL 自动填入编辑器，点击"执行"即可查询
-6. **AI 解释 / 分析**（可选）：
-   - 在编辑器工具栏点击「AI SQL 解释」，大模型会把这段 SQL 的业务含义写成中文注释，自动追加到 SQL 首行
-   - 点击「AI SQL 分析」，系统先执行 EXPLAIN 再交给大模型分析，并在弹窗中以表格+染色+提示词形式展示执行计划与优化建议；相同 SQL 会命中本地缓存
-   - 点击「分析历史」可回看所有已执行的分析，或一键清空
+6. **AI 解释 / 分析 / 优化**（可选）：
+   - 点击「AI SQL 解释」，大模型会把这段 SQL 的业务含义写成中文注释
+   - 点击「AI SQL 分析」，系统先执行 EXPLAIN 再交给大模型分析
+   - 点击「AI SQL 优化」，系统会给出优化后的等价 SQL
 
 ## 🤖 AI 配置（多配置 · 多服务商 · 可自定义提示词）
 
@@ -209,28 +204,31 @@ docker run -d \
 4. 输入 API Key 后失焦或选择其他服务商时，会通过后端代理自动拉取模型列表
 5. 手动选择或输入模型名，点击"添加配置"
 6. 在上方列表中点击"使用"切换当前激活配置，或点击"×"删除
-7. （可选）访问 `/settings/ai` 下方的"提示词模板"区域，在线编辑 `generate_sql / analyze_sql / explain_sql` 三类提示词，可随时重置为默认
 
 ### 内置 AI 服务商
 
-| 名称 | chatUrl | modelsUrl | 默认模型 |
-|------|---------|-----------|----------|
-| DeepSeek | `https://api.deepseek.com/v1/chat/completions` | `https://api.deepseek.com/models` | `deepseek-chat` |
-| LongCat | `https://api.longcat.chat/openai/v1/chat/completions` | `https://api.longcat.chat/openai/v1/models` | `LongCat-2.0-Preview` |
-
-> 自定义服务商时，chatUrl 必须返回与 OpenAI `/chat/completions` 兼容的 JSON；支持 `stream=true`。
-
-### Prompt 设计要点
-
-- System Prompt 明确角色定位，强调字段准确性，禁止编造不存在的字段
-- User Prompt 注入选中表的完整 `SHOW CREATE TABLE` DDL，包含字段类型、索引、约束
-- 针对中文场景优化，兼容中文表名和中文列名
-- 性能分析 Prompt 要求聚焦 EXPLAIN 的 type / rows / filtered / Extra / possible_keys / key 等关键字段，输出可执行建议
-- 三类提示词均可在前端在线编辑并持久化到 `server/data/ai-prompts.json`
+| 名称 | chatUrl | 默认模型 |
+|------|---------|----------|
+| DeepSeek | `https://api.deepseek.com/v1/chat/completions` | `deepseek-chat` |
+| LongCat | `https://api.longcat.chat/openai/v1/chat/completions` | `LongCat-2.0-Preview` |
 
 ## 🔧 API 接口
 
 统一响应格式：`{ code: number, message: string, data: T }`。`code === 0` 表示成功，非 0 为失败并附带 message。
+
+### 认证
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/auth/register` | 注册（邮箱 + 密码 + 验证码） |
+| POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/logout` | 退出 |
+| GET | `/api/auth/me` | 当前用户信息 |
+| GET | `/api/auth/profile` | 个人资料 |
+| PUT | `/api/auth/profile` | 更新个人资料 |
+| PUT | `/api/auth/password` | 修改密码 |
+| POST | `/api/auth/email/send-code` | 发送验证码 |
+| POST | `/api/auth/email/check` | SMTP 自检 |
 
 ### 连接
 
@@ -243,89 +241,89 @@ docker run -d \
 | POST | `/api/connections/test` | 测试未保存的连接 |
 | POST | `/api/connections/:id/test` | 测试已保存的连接 |
 
-### 数据库（query 参数）
+### 数据库
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/databases?connectionId=xxx` | 获取数据库列表 |
-| GET | `/api/databases/tables?connectionId=xxx&database=xxx` | 获取表列表 |
-| GET | `/api/databases/columns?connectionId=xxx&database=xxx&table=xxx` | 获取字段列表 |
-| GET | `/api/databases/ddl?connectionId=xxx&database=xxx&table=xxx` | 获取 DDL |
+| GET | `/api/databases?connectionId=xxx` | 数据库列表 |
+| GET | `/api/databases/tables?connectionId=xxx&database=xxx` | 表列表 |
+| GET | `/api/databases/columns?connectionId=xxx&database=xxx&table=xxx` | 字段列表 |
+| GET | `/api/databases/ddl?connectionId=xxx&database=xxx&table=xxx` | DDL |
 
 ### 查询
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/query/execute` | 执行 SQL（body: `{ connectionId, database, sql }`，默认限制最多 1000 行 / 30s 超时，禁止 DDL 与权限操作） |
+| POST | `/api/query/execute` | 执行 SQL |
+| GET | `/api/query/history` | 查询历史（分页） |
+| DELETE | `/api/query/history/:id` | 删除单条历史 |
+| DELETE | `/api/query/history` | 清空历史 |
 
-### AI · 服务商 & 模型
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/ai/providers` | 获取内置 AI 服务商列表 |
-| POST | `/api/ai/models` | 通过后端代理拉取指定服务商/自定义 URL 的模型列表（body: `{ provider, apiKey, modelsUrl? }`） |
-
-### AI · 多配置管理
+### AI
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/ai/configs` | 获取配置列表（含 `activeId`） |
-| GET | `/api/ai/config` | 获取当前激活的单条配置 |
-| POST | `/api/ai/configs` | 新增配置（body: `{ apiKey, apiUrl?, model? }`；首个配置自动激活） |
-| DELETE | `/api/ai/configs/:id` | 删除配置 |
-| POST | `/api/ai/configs/:id/activate` | 激活指定配置 |
+| GET | `/api/ai/providers` | 服务商列表 |
+| POST | `/api/ai/models` | 拉取模型列表 |
+| GET/POST/DELETE | `/api/ai/configs` | AI 配置 CRUD |
+| POST | `/api/ai/configs/:id/activate` | 激活配置 |
+| POST | `/api/ai/test` | 测试 AI 连接 |
+| POST | `/api/ai/generate` | SSE 流式生成 SQL |
+| POST | `/api/ai/optimize` | SSE 流式优化 SQL |
+| POST | `/api/ai/analyze` | EXPLAIN + AI 分析 |
+| POST | `/api/ai/explain` | 业务解释 |
+| GET/POST/DELETE | `/api/ai/history` | 对话历史 CRUD |
+| GET/PUT/POST | `/api/ai/prompts` | 提示词模板管理 |
+| GET/DELETE | `/api/ai/analysis-history` | 分析历史 |
 
-> 历史遗留的单对象 `ai-config.json` 会在首次启动时自动迁移为多配置格式。
-
-### AI · 历史对话（生成历史）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/ai/history` | 获取全部生成历史；可选 `?connectionId=xxx` 过滤 |
-| POST | `/api/ai/history` | 新增一条生成历史（body: `{ connectionId, database, tables, question, sql }`） |
-| DELETE | `/api/ai/history/:id` | 删除单条历史 |
-| DELETE | `/api/ai/history` | 清空全部生成历史 |
-
-### AI · 流式 SQL 生成
+### 配额/套餐
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/ai/generate` | 流式生成 SQL（SSE，Content-Type: `text/event-stream`；body: `{ connectionId, database, tables, question }`） |
+| GET | `/api/quota` | 获取配额信息 |
+| POST | `/api/quota/upgrade` | 升级套餐 |
 
-SSE 事件消息结构：`{ type: 'thinking' | 'sql' | 'done' | 'error', content: string }`。
-
-### AI · SQL 业务解释
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/ai/explain` | 用中文解释 SQL 的业务含义（body: `{ sql }`；返回 `{ explanation }`） |
-
-### AI · SQL 性能分析
+### 支付
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/ai/analyze` | 先 EXPLAIN 再由 AI 给出优化建议（body: `{ connectionId, database, sql }`；相同 SQL 会命中本地缓存并返回 `cached: true`） |
-| GET | `/api/ai/analysis-history` | 获取分析历史（返回 `{ items, total }`） |
-| DELETE | `/api/ai/analysis-history` | 清空分析历史（返回 `{ cleared }`） |
+| POST | `/api/pay/create` | 创建订单 |
+| GET | `/api/pay/status/:orderId` | 查询状态 |
+| POST | `/api/pay/confirm` | 确认支付 |
+| POST | `/api/pay/cancel` | 取消订单 |
 
-### AI · 提示词模板
+### 反馈
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/ai/prompts` | 获取三类提示词（返回 Record\<type, IPromptTemplate\>） |
-| GET | `/api/ai/prompts/:type` | 获取指定类型提示词（type: `generate_sql` / `analyze_sql` / `explain_sql`） |
-| PUT | `/api/ai/prompts/:type` | 更新指定类型提示词（body: `{ prompt }`；不允许清空） |
-| POST | `/api/ai/prompts/:type/reset` | 重置为默认提示词 |
+| POST | `/api/feedback` | 提交反馈 |
+| GET | `/api/feedback` | 反馈列表 |
+| PUT | `/api/feedback/:id/status` | 更新状态 |
+| DELETE | `/api/feedback/:id` | 删除反馈 |
+
+### 审计日志
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/audit` | 审计日志（分页） |
+| DELETE | `/api/audit` | 清空日志 |
 
 ## 🗂 数据存储
 
 所有配置与历史均保存在 `server/data/` 目录下的 JSON 文件中（可通过 `DATA_DIR` 环境变量更改）：
 
+- `users.json` — 用户列表（密码 bcrypt 哈希 + 角色）
+- `sessions.json` — 登录会话（7 天 TTL）
 - `connections.json` — 数据库连接信息（密码 AES 加密）
-- `ai-config.json` — AI 配置（多配置列表 + 当前激活 ID；兼容旧版单对象并自动迁移）
+- `ai-config.json` — AI 配置（API Key AES 加密）
 - `ai-history.json` — AI 生成历史记录
-- `ai-prompts.json` — 三类提示词模板（支持在线编辑与重置）
-- `ai-analysis-cache.json` — SQL 分析结果缓存（加速相同 SQL 的重复分析）
+- `ai-prompts.json` — 四类提示词模板
+- `ai-sql-analysis-cache.json` — SQL 分析结果缓存
+- `query-history.json` — SQL 执行历史
+- `audit-log.json` — 操作审计日志
+- `usage-records.json` — 用户配额用量
+- `feedbacks.json` — 用户反馈
+- `pay-orders.json` — 支付订单
 
 数据仅存储在本地，不会上传到任何第三方服务。
 

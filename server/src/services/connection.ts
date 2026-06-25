@@ -4,9 +4,20 @@ import { v4 as uuidv4 } from 'uuid';
 import { IConnection, IConnectionCreate } from '../types';
 import { connectionStore } from '../store/json-store';
 import { config } from '../config';
+import { wrapMySqlError } from '../utils/mysql-error';
 
 // 连接池缓存
-const poolCache = new Map<string, mysql.Pool>();
+export const poolCache = new Map<string, mysql.Pool>();
+
+// 关闭所有连接池（优雅关闭时调用）
+export async function closeAllPools(): Promise<void> {
+  const promises: Promise<void>[] = [];
+  for (const [id, pool] of poolCache) {
+    promises.push(pool.end().catch(() => {}));
+  }
+  await Promise.all(promises);
+  poolCache.clear();
+}
 
 // 加密密码
 function encryptPassword(password: string): string {
@@ -107,35 +118,6 @@ export function deleteConnection(id: string, userId?: string): boolean {
   if (!existing) return false;
   removePool(id);
   return connectionStore.delete(id);
-}
-
-// MySQL 连接失败相关错误码（与 database.ts / query.ts 保持一致）
-const MYSQL_UNAVAILABLE_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ETIMEDOUT',
-  'PROTOCOL_CONNECTION_LOST',
-  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
-]);
-
-function wrapMySqlError(error: any): Error {
-  if (!error) return new Error('未知错误');
-  const code = String(error.code || '').toUpperCase();
-  const message = String(error.sqlMessage || error.message || '连接失败');
-
-  if (MYSQL_UNAVAILABLE_CODES.has(code) || /connect.*mysql|mysql.*connect|econnrefused|access denied for user/i.test(message)) {
-    const wrapped: any = new Error('未发现可用的mysql服务，请启动服务后刷新重试');
-    wrapped.code = 'MYSQL_UNAVAILABLE';
-    return wrapped;
-  }
-
-  const wrapped: any = new Error(message);
-  if (error.code) wrapped.code = error.code;
-  if (error.errno !== undefined) wrapped.errno = error.errno;
-  return wrapped;
 }
 
 // 测试连接

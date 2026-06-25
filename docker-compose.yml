@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: quick-auto-sql-server
+    ports:
+      - "13305:13305"
+    environment:
+      - PORT=13305
+      - ENCRYPT_KEY=${ENCRYPT_KEY:-please-set-a-random-key}
+      - DATA_DIR=/app/data
+      - NODE_ENV=production
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_SECURE=${SMTP_SECURE:-true}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - EMAIL_DEV_MODE=${EMAIL_DEV_MODE:-true}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - CSRF_SECRET=${CSRF_SECRET:-}
+    volumes:
+      - server-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13305/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: quick-auto-sql-client
+    ports:
+      - "13306:13306"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13306/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  server-data:
