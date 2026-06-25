@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
+import SHA256 from 'crypto-js/sha256';
 import { config } from '../config';
 import type { IUser, IAuthSession, IUserAiConfig, UserRole, PlanType } from '../types';
 // 注意：避免循环依赖（ai.ts 依赖本文件），这里直接硬编码默认配置 ID
@@ -66,8 +67,9 @@ async function verifyPasswordAsync(password: string, hash: string): Promise<bool
   if (isBcryptHash(hash)) {
     return bcrypt.compare(password, hash);
   }
-  // 兼容旧版 SHA256 哈希，验证后自动迁移到 bcrypt
-  return false;
+  // 兼容旧版 SHA256 哈希
+  const sha256Hash = SHA256(password).toString();
+  return sha256Hash === hash;
 }
 
 function readJson<T>(filePath: string, fallback: T): T {
@@ -81,7 +83,9 @@ function readJson<T>(filePath: string, fallback: T): T {
 
 function writeJson<T>(filePath: string, data: T): void {
   ensureDir(filePath);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 function generateSixDigitCode(): string {

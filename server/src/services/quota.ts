@@ -1,6 +1,7 @@
-import type { PlanType, IQuotaInfo, IUsageRecord } from '../types';
+import type { PlanType, IQuotaInfo, IUser } from '../types';
 import { findUserById, updateUserField } from './auth';
 import { incrementUsage, readUsage, sumMonthlyUsage } from '../store/quota-store';
+import { listQueryHistoryPage } from '../store/json-store';
 
 export const PLAN_QUOTAS: Record<PlanType, {
   aiGenerateOwnKey: number;
@@ -59,14 +60,13 @@ export function getUserPlan(userId: string): PlanType {
 }
 
 export function updateUserPlan(userId: string, plan: PlanType, expiresDays?: number): boolean {
-  const updates: Partial<IUsageRecord> = { plan } as any;
+  const updates: Partial<IUser> = { plan };
   if (expiresDays && expiresDays > 0) {
-    const expiresAt = new Date(Date.now() + expiresDays * 24 * 60 * 60 * 1000).toISOString();
-    (updates as any).planExpiresAt = expiresAt;
+    updates.planExpiresAt = new Date(Date.now() + expiresDays * 24 * 60 * 60 * 1000).toISOString();
   } else if (plan === 'free') {
-    (updates as any).planExpiresAt = undefined;
+    updates.planExpiresAt = undefined;
   }
-  return updateUserField(userId, updates as any);
+  return updateUserField(userId, updates);
 }
 
 function getUsedCount(userId: string, key: QuotaKey): number {
@@ -115,7 +115,7 @@ export function getQuotaInfo(userId: string): IQuotaInfo {
     aiAnalyze: getQuotaUsage(userId, 'aiAnalyze'),
     sqlExecute: getQuotaUsage(userId, 'sqlExecute'),
     historyLimit: PLAN_QUOTAS[plan].historyLimit,
-    historyUsed: 0,
+    historyUsed: listQueryHistoryPage(1, 1, undefined, userId).total,
     hasCustomPrompts: PLAN_QUOTAS[plan].customPrompts,
     trialUsed: user?.trialUsed,
   };

@@ -646,8 +646,4 @@ export const aiConfigStore = (() => {
   };
 })();
 
-// 当前激活的 AI 配置（不再使用，保留旧接口用于兼容；新项目建议直接走 services/ai.ts）
-export function readActiveAiConfig(): IAiConfig | null {
-  const data = aiConfigStore.read();
-  return null;  // 按用户隔离后，全局 activeId 无意义；调用方应传入 userId
-}
+

@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IAiConfig, IAiConfigCreate, IAiConfigStoreData, IAiGenerateRequest, IAiHistory, IAiHistoryCreate, IAiProvider, ISseMessage, IPromptTemplate, IPromptTemplateType, IUserAiConfig } from '../types';
-import { aiConfigStore, aiHistoryStore, readActiveAiConfig, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, listAnalysisCachePage, deleteAnalysisCacheById, clearAnalysisCache, DEFAULT_AI_CONFIG_ID } from '../store/json-store';
+import { aiConfigStore, aiHistoryStore, getPromptTemplate, getAllPromptTemplates, updatePromptTemplate, resetPromptTemplate, getDefaultPrompt, findAnalysisCache, saveAnalysisCache, listAnalysisCache, listAnalysisCachePage, deleteAnalysisCacheById, clearAnalysisCache, DEFAULT_AI_CONFIG_ID } from '../store/json-store';
 import { getTables, getTablesSchemaForAI } from './database';
 import { explainQuery } from './query';
 import { findUserById, updateUserAiConfigs, getAllUsers, displayNameOf } from './auth';
@@ -127,25 +127,32 @@ export async function testAiConnection(apiKey: string, apiUrl: string, model?: s
     throw new Error('API URL 必填');
   }
 
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: model || 'gpt-4o-mini',
-      messages: [{ role: 'user', content: 'Hi' }],
-      max_tokens: 5,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 5,
+      }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`${response.status} ${text}`);
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`${response.status} ${text}`);
+    }
+
+    return { ok: true, status: response.status };
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return { ok: true, status: response.status };
 }
 
 // 核心：根据用户的 aiConfigs 列表 + 配置库 → 构建可访问的配置列表
@@ -358,6 +365,8 @@ export async function generateSqlStream(
   messages.push(userMessage);
 
   // 调用 DeepSeek API（OpenAI 兼容格式）
+  const controller = new AbortController();
+  const connectTimeout = setTimeout(() => controller.abort(), 60000);
   const response = await fetch(aiConfig.apiUrl, {
     method: 'POST',
     headers: {
@@ -371,7 +380,9 @@ export async function generateSqlStream(
       temperature: 0.1,
       max_tokens: 2000,
     }),
+    signal: controller.signal,
   });
+  clearTimeout(connectTimeout);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -624,49 +635,41 @@ function buildAnalyzePrompt(sql: string, explainRows: Record<string, unknown>[])
     .replace(/\$\{explain\}/g, explainText);
 }
 
-function callAiNonStream(aiConfig: IAiConfig, userPrompt: string, defaultSystemPrompt?: string): Promise<string> {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const usingDefault = isDefaultAiConfig(aiConfig);
-      const systemContent = usingDefault && defaultSystemPrompt
-        ? defaultSystemPrompt
-        : '你是 MySQL 性能优化专家，只输出简洁的分析文本，不输出 Markdown 代码块，不多寒暄。';
+async function callAiNonStream(aiConfig: IAiConfig, userPrompt: string, defaultSystemPrompt?: string): Promise<string> {
+  const usingDefault = isDefaultAiConfig(aiConfig);
+  const systemContent = usingDefault && defaultSystemPrompt
+    ? defaultSystemPrompt
+    : '你是 MySQL 性能优化专家，只输出简洁的分析文本，不输出 Markdown 代码块，不多寒暄。';
 
-      const response = await fetch(aiConfig.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${aiConfig.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: aiConfig.model,
-          messages: [
-            { role: 'system', content: systemContent },
-            { role: 'user', content: userPrompt },
-          ],
-          stream: false,
-          temperature: 0.2,
-          max_tokens: 1200,
-        }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        reject(new Error(`AI API 调用失败: ${response.status} ${text}`));
-        return;
-      }
-
-      const data = (await response.json()) as any;
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string') {
-        reject(new Error('AI 响应格式异常'));
-        return;
-      }
-      resolve(content.trim());
-    } catch (err: any) {
-      reject(err);
-    }
+  const response = await fetch(aiConfig.apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${aiConfig.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: aiConfig.model,
+      messages: [
+        { role: 'system', content: systemContent },
+        { role: 'user', content: userPrompt },
+      ],
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 1200,
+    }),
   });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`AI API 调用失败: ${response.status} ${text}`);
+  }
+
+  const data = (await response.json()) as any;
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') {
+    throw new Error('AI 响应格式异常');
+  }
+  return content.trim();
 }
 
 // 去掉 SQL 顶部以 -- 开头的注释行（兼容行首空格、CRLF）

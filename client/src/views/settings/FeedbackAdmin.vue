@@ -42,41 +42,41 @@
           <el-table-column type="index" label="#" width="60" />
           <el-table-column prop="type" label="类型" width="100">
             <template #default="{ row }">
-              <el-tag :type="typeTagMap[row.type]" size="small">{{ typeLabelMap[row.type] }}</el-tag>
+              <el-tag :type="(typeTagMap as any)[(row as any).type]" size="small">{{ (typeLabelMap as any)[(row as any).type] }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">
-              <el-tag :type="statusTagMap[row.status]" size="small">{{ statusLabelMap[row.status] }}</el-tag>
+              <el-tag :type="(statusTagMap as any)[(row as any).status]" size="small">{{ (statusLabelMap as any)[(row as any).status] }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="description" label="描述" min-width="240">
             <template #default="{ row }">
-              <div class="desc-text">{{ row.description }}</div>
+              <div class="desc-text">{{ (row as any).description }}</div>
             </template>
           </el-table-column>
           <el-table-column prop="username" label="提交人" width="120">
             <template #default="{ row }">
-              <span>{{ row.username || '匿名' }}</span>
+              <span>{{ (row as any).username || '匿名' }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="email" label="邮箱" width="180">
             <template #default="{ row }">
-              <span v-if="row.email">{{ row.email }}</span>
+              <span v-if="(row as any).email">{{ (row as any).email }}</span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
           </el-table-column>
           <el-table-column prop="createdAt" label="提交时间" width="170">
             <template #default="{ row }">
-              {{ formatTime(row.createdAt) }}
+              {{ formatTime((row as any).createdAt) }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="160" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" type="primary" link @click="openReplyDialog(row)">
-                {{ row.status === 'pending' ? '处理' : '回复' }}
+              <el-button size="small" type="primary" link @click="openReplyDialog(row as any)">
+                {{ (row as any).status === 'pending' ? '处理' : '回复' }}
               </el-button>
-              <el-button size="small" type="danger" link @click="handleDelete(row)">
+              <el-button size="small" type="danger" link @click="handleDelete(row as any)">
                 删除
               </el-button>
             </template>
@@ -107,12 +107,12 @@
           <el-table-column type="index" label="#" width="60" />
           <el-table-column prop="type" label="类型" width="100">
             <template #default="{ row }">
-              <el-tag :type="typeTagMap[row.type]" size="small">{{ typeLabelMap[row.type] }}</el-tag>
+              <el-tag :type="(typeTagMap as any)[(row as any).type]" size="small">{{ (typeLabelMap as any)[(row as any).type] }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">
-              <el-tag :type="statusTagMap[row.status]" size="small">{{ statusLabelMap[row.status] }}</el-tag>
+              <el-tag :type="(statusTagMap as any)[(row as any).status]" size="small">{{ (statusLabelMap as any)[(row as any).status] }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="description" label="描述" min-width="240">
@@ -152,7 +152,7 @@
     <el-dialog v-if="isAdmin" v-model="replyDialogVisible" title="处理反馈" width="560px">
       <el-form v-if="currentFeedback" label-width="80px">
         <el-form-item label="类型">
-          <el-tag :type="typeTagMap[currentFeedback.type]" size="small">
+          <el-tag :type="(typeTagMap as any)[currentFeedback.type]" size="small">
             {{ typeLabelMap[currentFeedback.type] }}
           </el-tag>
         </el-form-item>
@@ -297,7 +297,7 @@ async function submitReply() {
       currentFeedback.value.id,
       replyStatus.value,
       replyContent.value,
-    )
+    ) as any
     if (res?.code === 0) {
       ElMessage.success('操作成功')
       replyDialogVisible.value = false
@@ -322,7 +322,7 @@ async function handleDelete(row: IFeedback) {
     return
   }
   try {
-    const res = await deleteFeedback(row.id)
+    const res = await deleteFeedback(row.id) as any
     if (res?.code === 0) {
       ElMessage.success('删除成功')
       loadList()

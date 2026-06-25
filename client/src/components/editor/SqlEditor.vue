@@ -2011,7 +2011,7 @@ async function handleApplyOptimization() {
       // 同时写入历史（方便 AI 对话面板的"历史"弹窗看到）
       if (aiStore?.addHistory) {
         aiStore.addHistory({
-          connectionId: props.connectionId,
+          connectionId: props.connectionId || '',
           database: currentDatabase.value,
           tables: workspaceStore.checkedTables.map((t: any) => t.table),
           question: `[应用优化] ${sql.slice(0, 60)}...`,

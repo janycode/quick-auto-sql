@@ -59,7 +59,9 @@ function writeOrders(orders: IPayOrder[]): void {
   const filePath = getFilePath();
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(orders, null, 2), 'utf-8');
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(orders, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 /**

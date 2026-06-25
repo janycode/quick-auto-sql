@@ -556,7 +556,7 @@ async function submitFeedback() {
       type: feedbackForm.type as FeedbackType,
       description: feedbackForm.description,
       email: feedbackForm.email || undefined,
-    })
+    }) as any
     if (res?.code === 0) {
       ElMessage.success('感谢你的反馈，我已收到！')
       feedbackVisible.value = false

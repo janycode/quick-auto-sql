@@ -34,7 +34,9 @@ function readFeedbacks(): IFeedback[] {
 function writeFeedbacks(feedbacks: IFeedback[]): void {
   const filePath = getFilePath();
   ensureDir(filePath);
-  fs.writeFileSync(filePath, JSON.stringify(feedbacks, null, 2), 'utf-8');
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(feedbacks, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 export function createFeedback(data: IFeedbackCreate, userId?: string, username?: string): IFeedback {
